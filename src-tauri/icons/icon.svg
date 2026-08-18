@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">git-knot application logo</title>
+  <desc id="desc">A warm orange and red Git graph woven into a compact knot on a dark rounded square.</desc>
+
+  <defs>
+    <linearGradient id="background" x1="160" y1="128" x2="864" y2="896" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#20242C"/>
+      <stop offset="0.55" stop-color="#11141A"/>
+      <stop offset="1" stop-color="#090B0F"/>
+    </linearGradient>
+
+    <linearGradient id="branch" x1="280" y1="210" x2="742" y2="810" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF941F"/>
+      <stop offset="0.42" stop-color="#FF5A00"/>
+      <stop offset="1" stop-color="#F21B16"/>
+    </linearGradient>
+
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(314 238) rotate(49) scale(650 620)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF7A1A" stop-opacity="0.16"/>
+      <stop offset="0.58" stop-color="#FF4D00" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#FF3A18" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="26" stdDeviation="34" flood-color="#000000" flood-opacity="0.32"/>
+    </filter>
+
+    <filter id="branchGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#FF430D" flood-opacity="0.24"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <rect x="64" y="64" width="896" height="896" rx="216" fill="url(#background)"/>
+    <rect x="65" y="65" width="894" height="894" rx="215" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2"/>
+    <rect x="64" y="64" width="896" height="896" rx="216" fill="url(#glow)"/>
+  </g>
+
+  <!-- Lower-left to upper-right strand. The dark under-stroke creates the knot's under-pass. -->
+  <path
+    d="M322 790 C322 676 344 622 428 556 C514 489 570 446 704 446"
+    fill="none"
+    stroke="#0D1015"
+    stroke-width="102"
+    stroke-linecap="round"
+    stroke-linejoin="round"/>
+  <path
+    d="M322 790 C322 676 344 622 428 556 C514 489 570 446 704 446"
+    fill="none"
+    stroke="url(#branch)"
+    stroke-width="62"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    filter="url(#branchGlow)"/>
+
+  <!-- Upper-left to lower-right strand crosses over at the center. -->
+  <path
+    d="M322 234 C322 350 344 404 430 470 C516 536 574 578 704 578"
+    fill="none"
+    stroke="url(#branch)"
+    stroke-width="62"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    filter="url(#branchGlow)"/>
+
+  <!-- Git nodes: hollow centers remain legible at small icon sizes. -->
+  <g fill="url(#branch)" filter="url(#branchGlow)">
+    <circle cx="322" cy="234" r="66"/>
+    <circle cx="704" cy="446" r="66"/>
+    <circle cx="704" cy="578" r="66"/>
+    <circle cx="322" cy="790" r="66"/>
+  </g>
+  <g fill="#11141A">
+    <circle cx="322" cy="234" r="25"/>
+    <circle cx="704" cy="446" r="25"/>
+    <circle cx="704" cy="578" r="25"/>
+    <circle cx="322" cy="790" r="25"/>
+  </g>
+
+  <!-- Small specular accents keep the nodes from reading as flat dots. -->
+  <g fill="#FFD28A" fill-opacity="0.56">
+    <circle cx="301" cy="213" r="10"/>
+    <circle cx="683" cy="425" r="10"/>
+    <circle cx="683" cy="557" r="10"/>
+    <circle cx="301" cy="769" r="10"/>
+  </g>
+</svg>

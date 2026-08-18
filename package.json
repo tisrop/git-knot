@@ -1,0 +1,51 @@
+{
+  "name": "git-knot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@11.17.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build && node scripts/build/check-production-bundle.mjs",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "generate:bindings": "cargo test --manifest-path src-tauri/Cargo.toml bindings::export_typescript_bindings -- --ignored --exact --nocapture",
+    "check:bindings": "cargo test --manifest-path src-tauri/Cargo.toml bindings::generated_typescript_bindings_are_current -- --exact",
+    "check": "pnpm run check:update-policy && pnpm run check:bindings && pnpm run typecheck && pnpm run check:frontend && pnpm run test && pnpm run check:rust",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "format:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
+    "check:update-policy": "node scripts/release/check-update-policy.mjs",
+    "validate:github-release": "node scripts/release/validate-github-release.mjs",
+    "lint": "oxlint src/ scripts/ --report-unused-disable-directives",
+    "lint:fix": "oxlint src/ scripts/ --fix --report-unused-disable-directives",
+    "format": "oxfmt --check src/ scripts/ package.json .oxlintrc.json .oxfmtrc.json",
+    "format:fix": "oxfmt src/ scripts/ package.json .oxlintrc.json .oxfmtrc.json",
+    "check:frontend": "pnpm run lint && pnpm run format"
+  },
+  "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "oxfmt": "^0.58.0",
+    "oxlint": "^1.78.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10"
+  }
+}
