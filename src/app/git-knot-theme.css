@@ -11,6 +11,8 @@
   --text-1: #211d1a;
   --text-2: #625c57;
   --text-3: #756f69;
+  --file-name-text: #202a36;
+  --file-directory-text: #687587;
   --text-inverse: #fff8f2;
   --border: rgba(38, 31, 27, 0.105);
   --border-strong: rgba(38, 31, 27, 0.19);
@@ -60,6 +62,8 @@
   --text-1: #f1f0ed;
   --text-2: #aaa6a2;
   --text-3: #92959c;
+  --file-name-text: #eef2f7;
+  --file-directory-text: #aab4c2;
   --text-inverse: #17100c;
   --border: rgba(255, 255, 255, 0.082);
   --border-strong: rgba(255, 255, 255, 0.15);
@@ -5185,24 +5189,12 @@ textarea::placeholder {
 }
 
 .commit-inline-file-path {
-  color: var(--text-1);
+  color: var(--file-name-text);
   font-weight: 560;
 }
 
 .commit-inline-directory {
-  color: var(--text-2);
-}
-
-:root[data-theme="dark"] .commit-inline-file-path {
-  color: #e4e7eb;
-}
-
-:root[data-theme="dark"] .commit-inline-directory {
-  color: #aeb4bd;
-}
-
-:root[data-theme="light"] .commit-inline-file-path {
-  color: #34302d;
+  color: var(--file-directory-text);
 }
 
 /* GitHub Release updater */
@@ -5438,12 +5430,15 @@ pre,
 }
 
 .repository-workbench .scm-path strong {
+  color: var(--file-name-text);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 550;
 }
 
 .repository-workbench .scm-path small {
+  color: var(--file-directory-text);
   font-size: 9.5px;
+  font-weight: 450;
   line-height: 1.35;
 }
 
@@ -5521,6 +5516,7 @@ pre,
 }
 
 .commit-inline-directory {
+  color: var(--file-directory-text);
   font-size: 10px;
   font-weight: 500;
 }
@@ -5535,8 +5531,9 @@ pre,
 }
 
 .commit-inline-file-path {
+  color: var(--file-name-text);
   font-size: 10.5px;
-  font-weight: 500;
+  font-weight: 550;
   line-height: 1.35;
 }
 
