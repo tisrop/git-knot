@@ -3,13 +3,14 @@ use crate::domain::{
     CherryPickCommitInput, CherryPickCommitPreview, CommitCreated, CommitDetails, CommitInput,
     ConflictDetails, ConflictResolutionInput, HistoryPage, HistoryQuery, LocalMergePreview,
     LocalMergeStrategy, MergeRecoveryInput, MergeRecoveryPreview, PublishBranchInput,
-    RemoteCreateInput, RemoteDeleteInput, RemoteDeletePreview, RemoteEditPreview,
-    RemoteTagDeleteInput, RemoteTagDeletePreview, RemoteTagDeletePreviewInput, RemoteTagPushInput,
-    RemoteUpdateInput, RepositoryMutationResult, RepositoryRefs, RepositoryRefsMutationResult,
-    RepositoryStashes, RepositoryStashesMutationResult, RepositoryStatus, RepositorySubmodules,
-    RepositoryTags, RepositoryTagsMutationResult, RepositoryWorktrees, ResetCommitInput,
-    ResetCommitMode, ResetCommitPreview, RevertCommitInput, RevertCommitPreview, StashCreateInput,
-    WorktreeCreateInput, WorktreeDiff, WorktreeLockInput, WorktreePruneInput, WorktreeUnlockInput,
+    PushBranchTargetInput, RemoteCreateInput, RemoteDeleteInput, RemoteDeletePreview,
+    RemoteEditPreview, RemoteTagDeleteInput, RemoteTagDeletePreview, RemoteTagDeletePreviewInput,
+    RemoteTagPushInput, RemoteUpdateInput, RepositoryMutationResult, RepositoryRefs,
+    RepositoryRefsMutationResult, RepositoryStashes, RepositoryStashesMutationResult,
+    RepositoryStatus, RepositorySubmodules, RepositoryTags, RepositoryTagsMutationResult,
+    RepositoryWorktrees, ResetCommitInput, ResetCommitMode, ResetCommitPreview, RevertCommitInput,
+    RevertCommitPreview, StashCreateInput, WorktreeCreateInput, WorktreeDiff, WorktreeLockInput,
+    WorktreePruneInput, WorktreeUnlockInput,
 };
 use crate::error::CommandError;
 use crate::infrastructure::git;
@@ -603,6 +604,20 @@ impl RepositoryService {
         self.with_write(path, |root| {
             started();
             git::publish_current_branch(root, input, cancellation, progress)
+        })
+    }
+
+    pub fn push_branch_target(
+        &self,
+        path: &Path,
+        input: &PushBranchTargetInput,
+        cancellation: Arc<AtomicBool>,
+        started: Arc<dyn Fn() + Send + Sync>,
+        progress: Arc<dyn Fn(git::FetchProgress) + Send + Sync>,
+    ) -> Result<(), CommandError> {
+        self.with_write(path, |root| {
+            started();
+            git::push_current_branch_to_target(root, input, cancellation, progress)
         })
     }
 

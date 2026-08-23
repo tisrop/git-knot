@@ -23,9 +23,10 @@ pub use project::{AppConfig, Project, ProjectMetadataUpdateInput, CURRENT_SCHEMA
 pub use refs::{
     BranchCreateAtCommitInput, BranchInfo, BranchKind, CherryPickCommitInput,
     CherryPickCommitPreview, LocalMergeMode, LocalMergePreview, LocalMergeStrategy,
-    PublishBranchInput, RemoteCreateInput, RemoteDeleteInput, RemoteDeletePreview,
-    RemoteEditPreview, RemoteInfo, RemoteUpdateInput, RepositoryRefs, RepositoryRefsMutationResult,
-    ResetCommitInput, ResetCommitMode, ResetCommitPreview, RevertCommitInput, RevertCommitPreview,
+    PublishBranchInput, PushBranchTargetInput, RemoteCreateInput, RemoteDeleteInput,
+    RemoteDeletePreview, RemoteEditPreview, RemoteInfo, RemoteUpdateInput, RepositoryRefs,
+    RepositoryRefsMutationResult, ResetCommitInput, ResetCommitMode, ResetCommitPreview,
+    RevertCommitInput, RevertCommitPreview,
 };
 pub use stash::{RepositoryStashes, RepositoryStashesMutationResult, StashCreateInput, StashInfo};
 pub use submodule::{RepositorySubmodules, SubmoduleInfo, SubmoduleState};

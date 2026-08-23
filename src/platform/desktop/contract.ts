@@ -156,6 +156,10 @@ export interface RepositoryApi {
     path: string,
     input: Domain.PublishBranchInput,
   ): Promise<Domain.GitOperationStarted>;
+  pushBranchTarget(
+    path: string,
+    input: Domain.PushBranchTargetInput,
+  ): Promise<Domain.GitOperationStarted>;
   sync(path: string): Promise<Domain.GitOperationStarted>;
   createCommit(path: string, input: Domain.CommitInput): Promise<Domain.CommitCreated>;
   previewAmendCommit(path: string): Promise<Domain.AmendCommitPreview>;

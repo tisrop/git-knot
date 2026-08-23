@@ -76,6 +76,8 @@ export type ProjectMetadataUpdateInput = { id: string, favorite: boolean, group:
 
 export type PublishBranchInput = { localFullName: string, remoteName: string, remoteBranchName: string, expectedLocalOid: string, };
 
+export type PushBranchTargetInput = { localFullName: string, remoteName: string, remoteBranchName: string, expectedLocalOid: string, expectedRemoteOid: string | null, };
+
 export type RemoteCreateInput = { name: string, fetchUrl: string, pushUrl: string | null, };
 
 export type RemoteDeleteInput = { name: string, expectedToken: string, };

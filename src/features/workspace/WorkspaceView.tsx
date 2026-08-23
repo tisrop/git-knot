@@ -24,11 +24,14 @@ import {
 import {
   desktopApi,
   type AmendCommitPreview,
+  type BranchInfo,
   type ConflictDetails,
   type ConflictResolutionChoice,
   type GitOperationEvent,
   type MergeRecoveryPreview,
   type Project,
+  type PushBranchTargetInput,
+  type RepositoryRefs,
   type RepositoryStatus,
   type ResetCommitMode,
   type ResetCommitPreview,
@@ -41,6 +44,7 @@ import { ImageDiffView } from "../diff/ImageDiffView";
 import { parseUnifiedDiff } from "../history/history";
 import { isActiveGitOperation } from "../operations/gitOperations";
 import { summarizeRepositoryStatus } from "../repository/status";
+import { PushBranchTargetDialog } from "./PushBranchTargetDialog";
 import {
   groupWorkspaceChanges,
   pathspecsForChange,
@@ -76,13 +80,18 @@ interface PendingConflictResolution {
 }
 
 type MergeRecoveryAction = "continue" | "abort";
-type CommitFollowUp = "none" | "push" | "sync";
+type CommitFollowUp = "none" | "push-target" | "sync";
 type AmendIntent = "submit" | "edit-message";
 
 interface PendingUndoCommit {
   mode: Extract<ResetCommitMode, "soft" | "mixed">;
   preview: ResetCommitPreview;
   message: string;
+}
+
+interface PendingPushTarget {
+  branch: BranchInfo;
+  refs: RepositoryRefs;
 }
 
 const COMMIT_REMOTE_OPERATION_KINDS = new Set<GitOperationEvent["kind"]>(["pull", "push", "sync"]);
@@ -315,6 +324,8 @@ export function WorkspaceView({
     top: number;
   } | null>(null);
   const [pendingUndoCommit, setPendingUndoCommit] = useState<PendingUndoCommit | null>(null);
+  const [pendingPushTarget, setPendingPushTarget] = useState<PendingPushTarget | null>(null);
+  const [pushTargetError, setPushTargetError] = useState<string | null>(null);
   const diffRequest = useRef(0);
   const mergeRecoveryRequest = useRef(0);
   const amendPreviewRequest = useRef(0);
@@ -350,6 +361,8 @@ export function WorkspaceView({
     setCommitMenuPosition(null);
     ++resetPreviewRequest.current;
     setPendingUndoCommit(null);
+    setPendingPushTarget(null);
+    setPushTargetError(null);
     setCommitMessage("");
   }, [project.path]);
 
@@ -612,7 +625,10 @@ export function WorkspaceView({
     }
   }
 
-  async function createNewCommit(followUp: CommitFollowUp) {
+  async function createNewCommit(
+    followUp: CommitFollowUp,
+    pushTarget: PushBranchTargetInput | null = null,
+  ) {
     const repositoryPath = project.path;
     const { subject, body } = splitCommitMessage(commitMessage);
     if (
@@ -624,8 +640,10 @@ export function WorkspaceView({
     )
       return;
 
+    if (followUp === "push-target" && !pushTarget) return;
     setBusyAction(followUp === "none" ? "commit" : `commit-${followUp}`);
     setNotice(null);
+    setPushTargetError(null);
     try {
       if (groups.staged.length === 0) {
         const staged = await desktopApi.repository.stageAll(repositoryPath);
@@ -647,33 +665,66 @@ export function WorkspaceView({
 
       try {
         const started =
-          followUp === "push"
-            ? await desktopApi.repository.push(repositoryPath)
+          followUp === "push-target"
+            ? await desktopApi.repository.pushBranchTarget(repositoryPath, {
+                ...pushTarget!,
+                expectedLocalOid: result.commit.oid,
+              })
             : await desktopApi.repository.sync(repositoryPath);
+        const operationKind = followUp === "push-target" ? "push" : "sync";
         onOperationStarted({
           operationId: started.operationId,
           repositoryPath,
-          kind: followUp,
+          kind: operationKind,
           state: "queued",
           phase: "queued",
           percent: null,
-          message: followUp === "push" ? "正在等待推送当前分支" : "正在等待同步当前分支",
+          message:
+            followUp === "push-target"
+              ? `正在等待推送到 ${pushTarget!.remoteName}/${pushTarget!.remoteBranchName}`
+              : "正在等待同步当前分支",
           remoteTagDeletePreview: null,
         });
         if (activeRepositoryPath.current === repositoryPath) {
+          if (followUp === "push-target") setPendingPushTarget(null);
           setNotice(
-            followUp === "push"
+            followUp === "push-target"
               ? `已创建提交 ${shortCommit}，正在推送`
               : `已创建提交 ${shortCommit}，正在同步`,
           );
         }
       } catch (cause) {
         if (activeRepositoryPath.current === repositoryPath) {
-          onError(
-            `已创建提交 ${shortCommit}，但${followUp === "push" ? "推送" : "同步"}未能启动：${errorMessage(cause)}`,
-          );
+          const message = `已创建提交 ${shortCommit}，但${followUp === "push-target" ? "推送" : "同步"}未能启动：${errorMessage(cause)}`;
+          if (followUp === "push-target") setPushTargetError(message);
+          else onError(message);
         }
       }
+    } catch (cause) {
+      if (activeRepositoryPath.current === repositoryPath) {
+        if (followUp === "push-target") setPushTargetError(errorMessage(cause));
+        else onError(errorMessage(cause));
+      }
+    } finally {
+      if (activeRepositoryPath.current === repositoryPath) setBusyAction(null);
+    }
+  }
+
+  async function openCommitPushTarget() {
+    if (mutationBlocked()) return;
+    const repositoryPath = project.path;
+    setBusyAction("load-push-target");
+    setNotice(null);
+    setPushTargetError(null);
+    try {
+      const refs = await desktopApi.repository.refs(repositoryPath);
+      if (activeRepositoryPath.current !== repositoryPath) return;
+      const branch = refs.branches.find(
+        (candidate) => candidate.current && candidate.kind === "local",
+      );
+      if (!branch) throw new Error("当前处于 detached HEAD，无法推送当前分支");
+      if (refs.remotes.length === 0) throw new Error("当前仓库没有可用于推送的远端");
+      setPendingPushTarget({ branch, refs });
     } catch (cause) {
       if (activeRepositoryPath.current === repositoryPath) onError(errorMessage(cause));
     } finally {
@@ -947,7 +998,7 @@ export function WorkspaceView({
     groups.conflicted.length > 0 ||
     !commitSubject ||
     !amendPreview?.canAmend;
-  const remoteCommitDisabled = commitDisabled || !status?.branch.upstream;
+  const syncCommitDisabled = commitDisabled || !status?.branch.upstream;
   const amendDisabled =
     busy || mergeRecovery !== null || groups.conflicted.length > 0 || !status?.branch.oid;
   const amendSubmitDisabled = amendDisabled;
@@ -1210,19 +1261,18 @@ export function WorkspaceView({
                   <button
                     type="button"
                     role="menuitem"
-                    disabled={remoteCommitDisabled}
-                    title={!status?.branch.upstream ? "当前分支没有远端上游" : undefined}
+                    disabled={commitDisabled}
                     onClick={() => {
                       setCommitMenuOpen(false);
-                      void createNewCommit("push");
+                      void openCommitPushTarget();
                     }}
                   >
-                    提交和推送
+                    提交和推送…
                   </button>
                   <button
                     type="button"
                     role="menuitem"
-                    disabled={remoteCommitDisabled}
+                    disabled={syncCommitDisabled}
                     title={!status?.branch.upstream ? "当前分支没有远端上游" : undefined}
                     onClick={() => {
                       setCommitMenuOpen(false);
@@ -1576,6 +1626,21 @@ export function WorkspaceView({
             </button>
           </div>
         </Dialog>
+      ) : null}
+
+      {pendingPushTarget ? (
+        <PushBranchTargetDialog
+          branch={pendingPushTarget.branch}
+          refs={pendingPushTarget.refs}
+          busy={busy}
+          error={pushTargetError}
+          returnFocusElement={commitMenuButtonRef.current}
+          onClose={() => {
+            setPendingPushTarget(null);
+            setPushTargetError(null);
+          }}
+          onPush={(input) => void createNewCommit("push-target", input)}
+        />
       ) : null}
 
       {pendingAmendConfirmation && amendPreview ? (

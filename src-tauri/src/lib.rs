@@ -80,6 +80,7 @@ pub fn run() {
             commands::repository::repository_pull_start,
             commands::repository::repository_pop_stash,
             commands::repository::repository_publish_branch_start,
+            commands::repository::repository_push_branch_target_start,
             commands::repository::repository_push_start,
             commands::repository::repository_push_tag_start,
             commands::repository::repository_sync_start,

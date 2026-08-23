@@ -57,6 +57,17 @@ pub struct PublishBranchInput {
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PushBranchTargetInput {
+    pub local_full_name: String,
+    pub remote_name: String,
+    pub remote_branch_name: String,
+    pub expected_local_oid: String,
+    pub expected_remote_oid: Option<String>,
+}
+
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteCreateInput {
     pub name: String,
     pub fetch_url: String,

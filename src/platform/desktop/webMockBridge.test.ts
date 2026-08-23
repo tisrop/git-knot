@@ -581,6 +581,52 @@ describe("web mock branch publishing", () => {
   });
 });
 
+describe("web mock selected branch push", () => {
+  let pushBridge: DesktopApi;
+  const path = "/Users/demo/projects/git-knot";
+
+  beforeEach(async () => {
+    vi.resetModules();
+    pushBridge = (await import("./webMockBridge")).webMockBridge;
+  });
+
+  it("推送到所选现有远端分支并设置上游", async () => {
+    vi.useFakeTimers();
+    const refs = await pushBridge.repository.refs(path);
+    const current = refs.branches.find((branch) => branch.current && branch.kind === "local")!;
+    const target = refs.branches.find(
+      (branch) => branch.kind === "remote" && branch.name === "origin/main",
+    )!;
+
+    const started = await pushBridge.repository.pushBranchTarget(path, {
+      localFullName: current.fullName,
+      remoteName: "origin",
+      remoteBranchName: "main",
+      expectedLocalOid: current.oid,
+      expectedRemoteOid: target.oid,
+    });
+    expect(started.operationId).toContain("mock-push-target");
+    await vi.advanceTimersByTimeAsync(500);
+
+    const after = await pushBridge.repository.refs(path);
+    expect(after.branches.find((branch) => branch.current)?.upstream).toBe("origin/main");
+  });
+
+  it("新建目标拒绝覆盖同名远端分支", async () => {
+    const refs = await pushBridge.repository.refs(path);
+    const current = refs.branches.find((branch) => branch.current && branch.kind === "local")!;
+    await expect(
+      pushBridge.repository.pushBranchTarget(path, {
+        localFullName: current.fullName,
+        remoteName: "origin",
+        remoteBranchName: "main",
+        expectedLocalOid: current.oid,
+        expectedRemoteOid: null,
+      }),
+    ).rejects.toThrow("目标远端分支已经存在");
+  });
+});
+
 describe("web mock sync operation", () => {
   it("按 Pull 后 Push 的顺序发送同步生命周期", async () => {
     vi.useFakeTimers();

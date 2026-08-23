@@ -4,12 +4,12 @@ use crate::domain::{
     ConflictDetails, ConflictResolutionInput, GitOperationEvent, GitOperationKind,
     GitOperationStarted, GitOperationState, HistoryPage, HistoryQuery, LocalMergePreview,
     LocalMergeStrategy, MergeRecoveryInput, MergeRecoveryPreview, PublishBranchInput,
-    RemoteCreateInput, RemoteDeleteInput, RemoteDeletePreview, RemoteEditPreview,
-    RemoteTagDeleteInput, RemoteTagDeletePreviewInput, RemoteTagPushInput, RemoteUpdateInput,
-    RepositoryMutationResult, RepositoryRefs, RepositoryRefsMutationResult, RepositoryStashes,
-    RepositoryStashesMutationResult, RepositoryStatus, RepositorySubmodules, RepositoryTags,
-    RepositoryTagsMutationResult, RepositoryWorktrees, ResetCommitInput, ResetCommitMode,
-    ResetCommitPreview, RevertCommitInput, RevertCommitPreview, StashCreateInput,
+    PushBranchTargetInput, RemoteCreateInput, RemoteDeleteInput, RemoteDeletePreview,
+    RemoteEditPreview, RemoteTagDeleteInput, RemoteTagDeletePreviewInput, RemoteTagPushInput,
+    RemoteUpdateInput, RepositoryMutationResult, RepositoryRefs, RepositoryRefsMutationResult,
+    RepositoryStashes, RepositoryStashesMutationResult, RepositoryStatus, RepositorySubmodules,
+    RepositoryTags, RepositoryTagsMutationResult, RepositoryWorktrees, ResetCommitInput,
+    ResetCommitMode, ResetCommitPreview, RevertCommitInput, RevertCommitPreview, StashCreateInput,
     WorktreeCreateInput, WorktreeDiff, WorktreeLockInput, WorktreePruneInput, WorktreeUnlockInput,
     GIT_OPERATION_EVENT,
 };
@@ -1085,6 +1085,118 @@ pub async fn repository_publish_branch_start(
                 phase: Some("completed".to_owned()),
                 percent: Some(100),
                 message: format!("已发布当前分支到 {target_label} 并设置上游"),
+                remote_tag_delete_preview: None,
+            },
+            Err(error) => {
+                let state = match error.code {
+                    "git_operation_cancelled" => GitOperationState::Cancelled,
+                    "git_operation_timed_out" => GitOperationState::TimedOut,
+                    _ => GitOperationState::Failed,
+                };
+                GitOperationEvent {
+                    operation_id: task_operation_id.clone(),
+                    repository_path,
+                    kind: GitOperationKind::Push,
+                    state,
+                    phase: Some("completed".to_owned()),
+                    percent: None,
+                    message: error.message,
+                    remote_tag_delete_preview: None,
+                }
+            }
+        };
+        emit_operation(&app, event);
+    });
+
+    Ok(GitOperationStarted { operation_id })
+}
+
+#[tauri::command]
+pub async fn repository_push_branch_target_start(
+    path: String,
+    input: PushBranchTargetInput,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<GitOperationStarted, CommandError> {
+    let operation = state.git_operations.register()?;
+    let operation_id = operation.operation_id().to_owned();
+    let cancellation = operation.cancellation();
+    let repository = state.repository.clone();
+    let repository_path = path.clone();
+    let task_operation_id = operation_id.clone();
+    let target_label = format!("{}/{}", input.remote_name, input.remote_branch_name);
+
+    emit_operation(
+        &app,
+        GitOperationEvent {
+            operation_id: operation_id.clone(),
+            repository_path: repository_path.clone(),
+            kind: GitOperationKind::Push,
+            state: GitOperationState::Queued,
+            phase: Some("queued".to_owned()),
+            percent: None,
+            message: format!("正在等待推送到 {target_label}"),
+            remote_tag_delete_preview: None,
+        },
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
+        let started_app = app.clone();
+        let started_operation_id = task_operation_id.clone();
+        let started_repository_path = repository_path.clone();
+        let started_target_label = target_label.clone();
+        let started: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            emit_operation(
+                &started_app,
+                GitOperationEvent {
+                    operation_id: started_operation_id.clone(),
+                    repository_path: started_repository_path.clone(),
+                    kind: GitOperationKind::Push,
+                    state: GitOperationState::Running,
+                    phase: Some("connecting".to_owned()),
+                    percent: None,
+                    message: format!("正在推送当前分支到 {started_target_label}"),
+                    remote_tag_delete_preview: None,
+                },
+            );
+        });
+
+        let progress_app = app.clone();
+        let progress_operation_id = task_operation_id.clone();
+        let progress_repository_path = repository_path.clone();
+        let progress: Arc<dyn Fn(FetchProgress) + Send + Sync> = Arc::new(move |update| {
+            emit_operation(
+                &progress_app,
+                GitOperationEvent {
+                    operation_id: progress_operation_id.clone(),
+                    repository_path: progress_repository_path.clone(),
+                    kind: GitOperationKind::Push,
+                    state: GitOperationState::Progress,
+                    phase: Some(update.phase),
+                    percent: update.percent,
+                    message: update.message,
+                    remote_tag_delete_preview: None,
+                },
+            );
+        });
+
+        let result = repository.push_branch_target(
+            &PathBuf::from(&repository_path),
+            &input,
+            cancellation,
+            started,
+            progress,
+        );
+        let event = match result {
+            Ok(()) => GitOperationEvent {
+                operation_id: task_operation_id.clone(),
+                repository_path,
+                kind: GitOperationKind::Push,
+                state: GitOperationState::Succeeded,
+                phase: Some("completed".to_owned()),
+                percent: Some(100),
+                message: format!("已推送到 {target_label} 并设置上游"),
                 remote_tag_delete_preview: None,
             },
             Err(error) => {
