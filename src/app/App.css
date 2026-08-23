@@ -2558,35 +2558,35 @@ button:focus-visible {
 .graph-tone-local,
 .graph-tone-synced,
 .graph-tone-plain {
-  --commit-graph-tone: #2f98ff;
+  --commit-graph-tone: var(--graph-local);
 }
 
 .graph-tone-remote {
-  --commit-graph-tone: #b886ff;
+  --commit-graph-tone: var(--graph-remote);
 }
 
 .graph-tone-primary {
-  --commit-graph-tone: #f97316;
+  --commit-graph-tone: var(--graph-primary);
 }
 
 .graph-tone-branch-rose {
-  --commit-graph-tone: #d63384;
+  --commit-graph-tone: var(--graph-rose);
 }
 
 .graph-tone-branch-cyan {
-  --commit-graph-tone: #0ea5a8;
+  --commit-graph-tone: var(--graph-cyan);
 }
 
 .graph-tone-branch-violet {
-  --commit-graph-tone: #8b5cf6;
+  --commit-graph-tone: var(--graph-violet);
 }
 
 .graph-tone-branch-amber {
-  --commit-graph-tone: #f0b429;
+  --commit-graph-tone: var(--graph-amber);
 }
 
 .graph-tone-branch-green {
-  --commit-graph-tone: #22a06b;
+  --commit-graph-tone: var(--graph-green);
 }
 
 .commit-graph-cell.graph-first-node .commit-graph-node:not(.root) {
