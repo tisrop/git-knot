@@ -35,6 +35,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { Dialog } from "../../app/Dialog";
+import { FileTypeBadge } from "../../app/FileTypeBadge";
 import { UnifiedDiffView } from "../diff/UnifiedDiffView";
 import { ImageDiffView } from "../diff/ImageDiffView";
 import {
@@ -1255,10 +1256,14 @@ export function HistoryView({
           setSelectedFilePath(file.path);
         }}
       >
-        <span className={`commit-file-status status-${file.status.charAt(0)}`}>
-          {commitFileStatusLabel(file.status)}
-        </span>
+        <FileTypeBadge path={file.path} />
         <span className="commit-inline-file-path">{label}</span>
+        <span
+          className={`commit-file-status status-${file.status.charAt(0)}`}
+          title={`变更类型：${commitFileStatusLabel(file.status)}`}
+        >
+          {file.status.charAt(0) || "?"}
+        </span>
       </button>
     );
   }

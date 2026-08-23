@@ -35,6 +35,7 @@ import {
   type WorktreeDiff,
 } from "../../platform/desktop";
 import { Dialog } from "../../app/Dialog";
+import { FileTypeBadge } from "../../app/FileTypeBadge";
 import { UnifiedDiffView } from "../diff/UnifiedDiffView";
 import { ImageDiffView } from "../diff/ImageDiffView";
 import { parseUnifiedDiff } from "../history/history";
@@ -44,7 +45,6 @@ import {
   groupWorkspaceChanges,
   pathspecsForChange,
   workspaceEntryKey,
-  workspaceFileType,
   workspaceMutationBlocked,
   workspaceStatusLabel,
   type WorkspaceEntry,
@@ -202,7 +202,6 @@ function WorkspaceSection({
         const pathParts = entry.change.path.split(/[\\/]/).filter(Boolean);
         const fileName = pathParts.at(-1) ?? entry.change.path;
         const directory = pathParts.slice(0, -1).join("/");
-        const fileType = workspaceFileType(entry.change.path);
         const changeType = workspaceStatusLabel(entry.change, entry.staged);
         return (
           <div
@@ -215,9 +214,7 @@ function WorkspaceSection({
               aria-pressed={isSelected}
               onClick={() => onSelect(entry)}
             >
-              <span className="scm-file-type" data-file-type={fileType} aria-hidden="true">
-                {fileType}
-              </span>
+              <FileTypeBadge path={entry.change.path} className="scm-file-type" />
               <span className="scm-path">
                 <strong title={entry.change.path}>{fileName}</strong>
                 {directory ? <small title={entry.change.path}>{directory}</small> : null}

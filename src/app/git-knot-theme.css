@@ -5524,6 +5524,82 @@ pre,
   line-height: 1.35;
 }
 
+/* Shared file-kind markers, matching the compact Git UI Pro file list. */
+.file-type-badge,
+.file-type-badge.scm-file-type {
+  display: inline-grid;
+  width: fit-content;
+  min-width: 22px;
+  max-width: 30px;
+  height: 17px;
+  flex: none;
+  place-items: center;
+  justify-self: center;
+  border: 1px solid color-mix(in srgb, var(--text-3) 42%, var(--border));
+  border-radius: 4px;
+  padding: 0 2px;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--text-3) 7%, transparent);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.file-type-badge[data-file-tone="git"] {
+  border-color: color-mix(in srgb, #4f86c6 46%, var(--border));
+  color: color-mix(in srgb, #4f86c6 82%, var(--text-1));
+  background: color-mix(in srgb, #4f86c6 9%, transparent);
+}
+
+.file-type-badge[data-file-tone="config"] {
+  border-color: color-mix(in srgb, #9a67d7 46%, var(--border));
+  color: color-mix(in srgb, #9a67d7 82%, var(--text-1));
+  background: color-mix(in srgb, #9a67d7 9%, transparent);
+}
+
+.file-type-badge[data-file-tone="image"] {
+  border-color: color-mix(in srgb, #dd648d 46%, var(--border));
+  color: color-mix(in srgb, #dd648d 82%, var(--text-1));
+  background: color-mix(in srgb, #dd648d 9%, transparent);
+}
+
+.file-type-badge[data-file-tone="web"] {
+  border-color: color-mix(in srgb, #dd704c 46%, var(--border));
+  color: color-mix(in srgb, #dd704c 82%, var(--text-1));
+  background: color-mix(in srgb, #dd704c 9%, transparent);
+}
+
+.file-type-badge[data-file-tone="code"] {
+  border-color: color-mix(in srgb, #d79a35 48%, var(--border));
+  color: color-mix(in srgb, #d79a35 84%, var(--text-1));
+  background: color-mix(in srgb, #d79a35 9%, transparent);
+}
+
+.file-type-badge[data-file-type="RS"],
+.file-type-badge[data-file-type="VUE"],
+.file-type-badge[data-file-type="GO"] {
+  border-color: color-mix(in srgb, var(--success) 46%, var(--border));
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+}
+
+.commit-inline-file {
+  grid-template-columns: 28px minmax(0, 1fr) 22px;
+  gap: 6px;
+}
+
+.commit-inline-file .commit-file-status {
+  min-width: 18px;
+  justify-self: end;
+  border-radius: 3px;
+  padding: 2px 3px;
+  font-size: 8px;
+  line-height: 1;
+  text-align: center;
+}
+
 .branch-row-copy strong,
 .tag-row-copy strong,
 .stash-row-copy strong,

@@ -1,4 +1,5 @@
 import type { FileChange, RepositoryStatus } from "../../platform/desktop";
+import { fileTypeDescriptor } from "../../app/fileType";
 
 export interface WorkspaceEntry {
   change: FileChange;
@@ -48,15 +49,7 @@ export function workspaceStatusLabel(change: FileChange, staged: boolean) {
 }
 
 export function workspaceFileType(path: string) {
-  const fileName = path.split(/[\\/]/).at(-1) ?? path;
-  const extensionSeparator = fileName.lastIndexOf(".");
-
-  if (extensionSeparator <= 0 || extensionSeparator === fileName.length - 1) {
-    return "FILE";
-  }
-
-  const extension = fileName.slice(extensionSeparator + 1).toUpperCase();
-  return extension.slice(0, 4);
+  return fileTypeDescriptor(path).label;
 }
 
 export function workspaceMutationBlocked(refreshing: boolean, busyAction: string | null) {

@@ -70,8 +70,13 @@ describe("workspace groups", () => {
     ["src/pages/PrNewPage.vue", "VUE"],
     ["src/pages/__tests__/PrNewPage.spec.ts", "TS"],
     ["src/components/LongExtension.component", "COMP"],
-    [".gitignore", "FILE"],
-    ["LICENSE", "FILE"],
+    [".gitignore", "GIT"],
+    [".oxfmt.json", "JSN"],
+    ["docs/workbench-diff.png", "PNG"],
+    ["index.html", "HTM"],
+    ["pnpm-lock.yaml", "YML"],
+    ["scripts/check-release.mjs", "MJS"],
+    ["LICENSE", "TXT"],
   ])("为 %s 生成紧凑文件类型标签 %s", (path, fileType) => {
     expect(workspaceFileType(path)).toBe(fileType);
   });
