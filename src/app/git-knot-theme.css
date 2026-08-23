@@ -13,6 +13,18 @@
   --text-3: #756f69;
   --file-name-text: #202a36;
   --file-directory-text: #687587;
+  --history-ref-local-text: #344458;
+  --history-ref-local-bg: #eef1f4;
+  --history-ref-local-border: #b8c0ca;
+  --history-ref-current-text: #a93408;
+  --history-ref-current-bg: #fff0e8;
+  --history-ref-current-border: #e6a181;
+  --history-ref-remote-text: #245b96;
+  --history-ref-remote-bg: #ebf2fa;
+  --history-ref-remote-border: #a9c2de;
+  --history-ref-tag-text: #85520a;
+  --history-ref-tag-bg: #faf1df;
+  --history-ref-tag-border: #d9bd82;
   --text-inverse: #fff8f2;
   --border: rgba(38, 31, 27, 0.105);
   --border-strong: rgba(38, 31, 27, 0.19);
@@ -64,6 +76,18 @@
   --text-3: #92959c;
   --file-name-text: #eef2f7;
   --file-directory-text: #aab4c2;
+  --history-ref-local-text: #e0e6ed;
+  --history-ref-local-bg: #252b33;
+  --history-ref-local-border: #4a5563;
+  --history-ref-current-text: #ff9b69;
+  --history-ref-current-bg: #3b241b;
+  --history-ref-current-border: #a94e25;
+  --history-ref-remote-text: #9bc7f4;
+  --history-ref-remote-bg: #1e3043;
+  --history-ref-remote-border: #456f9b;
+  --history-ref-tag-text: #f1c473;
+  --history-ref-tag-bg: #382f1e;
+  --history-ref-tag-border: #79633a;
   --text-inverse: #17100c;
   --border: rgba(255, 255, 255, 0.082);
   --border-strong: rgba(255, 255, 255, 0.15);
@@ -5464,21 +5488,19 @@ pre,
 }
 
 .commit-row .history-ref-chip {
-  position: relative;
-  top: 1px;
   height: 17px;
   min-height: 17px;
   justify-content: center;
-  border-color: var(--border-strong) !important;
+  border-color: var(--history-ref-local-border) !important;
   padding: 0 5px;
-  color: var(--text-1) !important;
-  background: var(--surface-2) !important;
-  font-size: 10px;
-  font-weight: 600;
+  color: var(--history-ref-local-text) !important;
+  background: var(--history-ref-local-bg) !important;
+  font-size: 10.5px;
+  font-weight: 650;
   line-height: 1;
   letter-spacing: 0;
-  text-rendering: geometricPrecision;
-  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: auto;
 }
 
 .commit-row .history-ref-chip-label {
@@ -5490,19 +5512,21 @@ pre,
 }
 
 .commit-row .history-ref-chip.current {
-  border-color: var(--accent-medium) !important;
-  color: var(--accent) !important;
-  background: var(--accent-soft) !important;
+  border-color: var(--history-ref-current-border) !important;
+  color: var(--history-ref-current-text) !important;
+  background: var(--history-ref-current-bg) !important;
 }
 
 .commit-row .history-ref-chip.remote {
-  color: var(--info) !important;
-  background: var(--info-soft) !important;
+  border-color: var(--history-ref-remote-border) !important;
+  color: var(--history-ref-remote-text) !important;
+  background: var(--history-ref-remote-bg) !important;
 }
 
 .commit-row .history-ref-chip.tag {
-  color: var(--warning) !important;
-  background: var(--warning-soft) !important;
+  border-color: var(--history-ref-tag-border) !important;
+  color: var(--history-ref-tag-text) !important;
+  background: var(--history-ref-tag-bg) !important;
 }
 
 .commit-row-author {
