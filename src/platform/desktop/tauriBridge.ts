@@ -229,6 +229,8 @@ export const tauriBridge: DesktopApi = {
       invoke<GitOperationStarted>("repository_fetch_start", { path, remoteName }),
     pull: (path) => invoke<GitOperationStarted>("repository_pull_start", { path }),
     push: (path) => invoke<GitOperationStarted>("repository_push_start", { path }),
+    publishBranch: (path, input) =>
+      invoke<GitOperationStarted>("repository_publish_branch_start", { path, input }),
     sync: (path) => invoke<GitOperationStarted>("repository_sync_start", { path }),
     createCommit: (path, input: CommitInput) =>
       invoke<CommitCreated>("repository_create_commit", { path, input }),

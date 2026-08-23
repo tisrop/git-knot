@@ -6,14 +6,14 @@ use crate::domain::{
     ConflictSide, FileChange, GitOperationEvent, GitOperationKind, GitOperationStarted,
     GitOperationState, GitVersion, HistoryPage, HistoryQuery, ImageDiff, ImagePreview,
     LocalMergeMode, LocalMergePreview, LocalMergeStrategy, MergeRecoveryInput,
-    MergeRecoveryPreview, Project, ProjectMetadataUpdateInput, RemoteCreateInput,
-    RemoteDeleteInput, RemoteDeletePreview, RemoteEditPreview, RemoteInfo, RemoteTagDeleteInput,
-    RemoteTagDeletePreview, RemoteTagDeletePreviewInput, RemoteTagPushInput, RemoteUpdateInput,
-    RepositoryMutationResult, RepositoryRefs, RepositoryRefsMutationResult, RepositoryStashes,
-    RepositoryStashesMutationResult, RepositoryStatus, RepositorySubmodules, RepositoryTags,
-    RepositoryTagsMutationResult, RepositoryWorktrees, ResetCommitInput, ResetCommitMode,
-    ResetCommitPreview, RevertCommitInput, RevertCommitPreview, StashCreateInput, StashInfo,
-    SubmoduleInfo, SubmoduleState, TagInfo, UpdateCheckResult, UpdateProgressEvent,
+    MergeRecoveryPreview, Project, ProjectMetadataUpdateInput, PublishBranchInput,
+    RemoteCreateInput, RemoteDeleteInput, RemoteDeletePreview, RemoteEditPreview, RemoteInfo,
+    RemoteTagDeleteInput, RemoteTagDeletePreview, RemoteTagDeletePreviewInput, RemoteTagPushInput,
+    RemoteUpdateInput, RepositoryMutationResult, RepositoryRefs, RepositoryRefsMutationResult,
+    RepositoryStashes, RepositoryStashesMutationResult, RepositoryStatus, RepositorySubmodules,
+    RepositoryTags, RepositoryTagsMutationResult, RepositoryWorktrees, ResetCommitInput,
+    ResetCommitMode, ResetCommitPreview, RevertCommitInput, RevertCommitPreview, StashCreateInput,
+    StashInfo, SubmoduleInfo, SubmoduleState, TagInfo, UpdateCheckResult, UpdateProgressEvent,
     WorktreeCreateCandidate, WorktreeCreateInput, WorktreeDiff, WorktreeInfo, WorktreeLockInput,
     WorktreePruneInput, WorktreeUnlockInput,
 };
@@ -76,6 +76,7 @@ fn generated_bindings() -> String {
     declare!(MergeRecoveryPreview);
     declare!(Project);
     declare!(ProjectMetadataUpdateInput);
+    declare!(PublishBranchInput);
     declare!(RemoteCreateInput);
     declare!(RemoteDeleteInput);
     declare!(RemoteDeletePreview);

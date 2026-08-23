@@ -53,7 +53,7 @@
 - 读取并管理本地储藏：支持创建、Apply、Pop 和 Drop，以及 include untracked、keep index 和 restore index 选项；界面只展示 `stash@{n}` selector，所有 mutation 只提交精确 stash commit OID，Rust 在写锁内重新解析当前 selector 并二次校验；
 - 读取 `git worktree list --porcelain -z` 的权威工作树清单，展示主/关联、分支或 Detached HEAD、HEAD、锁定原因与 prunable 警告；可从 Rust 已读取且尚未检出的 exact 本地分支创建关联工作树，目标固定由 Rust 推导到主仓库同级 `.git-knot-worktrees` 受控目录，并继续支持使用精确路径和会话私有快照 token 锁定/解锁安全记录；失效记录可用整份清单 `pruneToken` 二次确认后执行固定 prune；不接受任意路径/ref/revision，move、remove 和 repair 仍未开放，详细边界见 ADR 0026、ADR 0027 与 ADR 0029；
 - 读取当前 index 中 mode `160000` 的直接 Submodule 清单，并结合受限 `.gitmodules` 配置、目标 OID 和已验证 checkout 的 HEAD/工作区状态展示 clean、modified、uninitialized、conflicted 与 unsafe；`.gitmodules` 和 checkout 路径拒绝 symlink，URL 返回前脱敏，不执行 init/update/sync、网络访问或递归遍历，详细边界见 `docs/adr/0028-read-only-submodule-inventory.md`；
-- 支持针对已配置远端的 fetch、当前分支 upstream-only 的安全 Pull 和非强制 Push；三者都提供 operation ID、结构化进度、显式取消、5 分钟总超时和进程树清理；Pull 只执行 fetch + `merge --ff-only`，Push 只推送当前分支到已有 upstream，分叉或非快进时拒绝操作；
+- 支持针对已配置远端的 fetch、当前分支 upstream-only 的安全 Pull 和非强制 Push；当前本地分支没有 upstream 时，可将其 create-only 发布为远端新分支并设置 upstream；这些网络操作都提供 operation ID、结构化进度、显式取消、5 分钟总超时和进程树清理；Pull 只执行 fetch + `merge --ff-only`，已有 upstream 的 Push 只推送当前分支，分叉或非快进时拒绝操作；
 - 支持从 HTTPS、SSH 和 SCP-like SSH 地址克隆 GitHub、GitLab 等远端仓库；Clone 使用 Rust 推导目录名、staging 目录和原子落盘，支持结构化进度、取消、超时和进程树清理；不支持 Gitee、HTTP、带凭据 URL、query/fragment 或自定义 Git 参数；
 - 读取当前 `HEAD` 或一个已存在的本地分支、远端跟踪分支、标签可达的提交历史；Rust 只接受 exact full ref 并解析为 commit OID，不开放任意 revision 或 `--all`；未筛选结果使用 parent OID 绘制受限提交图并显示 branch/tag decorations，筛选结果降级为离散节点，通过 `hasMore/nextOffset` 继续加载；详细边界见 `docs/adr/0025-bounded-ref-aware-commit-graph.md`；
 - 展示提交文件列表、重命名原路径和 patch，merge commit 采用 first-parent diff；
@@ -72,6 +72,7 @@
 - 同一仓库的写操作通过 Rust application 层串行化，不同仓库可以并行；Pull 的 fetch 与快进阶段共享同一个 5 分钟 deadline，Push 复用同一长任务边界。
 - 单文件和批量放弃统一使用精确文件路径 API；Rust 在任何 mutation 前重新读取 status 并校验完整列表，拒绝冲突、仅暂存、重复和过期条目。tracked restore 与 untracked clean 是两个阶段，失败后界面刷新权威状态，不宣称跨进程事务。
 - 分支切换只接受 Rust 重新读取后确认存在的本地 full ref；远端 URL 返回前会去除凭据、查询参数和片段。
+- 发布分支只允许当前 attached 且尚无 upstream 的本地分支，并在仓库写锁内重新校验 full ref、OID、远端和目标分支名；远端存在性检查与 Push 共用同一个 5 分钟 deadline，Push 使用 `--force-with-lease=refs/heads/<name>:` 空期望 lease，仅在目标远端分支不存在时创建并设置 upstream，拒绝覆盖任何已存在的远端分支。
 - Remote 创建、更新和删除统一进入仓库写队列；编辑与删除先获取覆盖地址和受影响 upstream 的快照 token，执行时配置已变化则拒绝。删除会移除本地远端跟踪引用和相关 upstream 配置，但不会删除服务器上的分支；详细边界见 `docs/adr/0021-safe-remote-management.md`。
 - 从历史提交创建分支只接受 40/64 位精确 commit OID 和经 Git 校验的分支名，固定创建 `refs/heads/*` 且不切换 HEAD；`update-ref` 使用“引用必须不存在”的条件写入，避免外部进程竞争时覆盖已有分支。
 - 分支删除同样只接受 Rust 在写锁内重新确认的本地 full ref；当前分支和远端分支不能删除，未合并分支只有二次确认后才使用受控的强制删除。

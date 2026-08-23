@@ -36,6 +36,7 @@ import {
 } from "@phosphor-icons/react";
 import { Dialog } from "../../app/Dialog";
 import { FileTypeBadge } from "../../app/FileTypeBadge";
+import { PublishBranchDialog } from "../branches/PublishBranchDialog";
 import { UnifiedDiffView } from "../diff/UnifiedDiffView";
 import { ImageDiffView } from "../diff/ImageDiffView";
 import {
@@ -50,6 +51,7 @@ import {
   type LocalMergePreview,
   type LocalMergeStrategy,
   type Project,
+  type PublishBranchInput,
   type RepositoryStatus,
   type ResetCommitMode,
   type ResetCommitPreview,
@@ -324,6 +326,8 @@ export function HistoryView({
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
   const [operationAction, setOperationAction] = useState<"fetch" | "pull" | "push" | null>(null);
+  const [publishBranchOpen, setPublishBranchOpen] = useState(false);
+  const [publishBranchError, setPublishBranchError] = useState<string | null>(null);
   const [amendSubject, setAmendSubject] = useState("");
   const [amendBody, setAmendBody] = useState("");
   const [hardResetAcknowledged, setHardResetAcknowledged] = useState(false);
@@ -350,6 +354,7 @@ export function HistoryView({
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const moreMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreMenuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const pushButtonRef = useRef<HTMLButtonElement | null>(null);
   const dialogReturnFocusRef = useRef<HTMLElement | null>(null);
 
   const loadHistory = useCallback(
@@ -441,6 +446,8 @@ export function HistoryView({
     setNewBranchOpen(false);
     setNewBranchName("");
     setOperationAction(null);
+    setPublishBranchOpen(false);
+    setPublishBranchError(null);
     setHardResetAcknowledged(false);
     void loadHistory(project.path, emptyFilters, "replace", 0, null);
     void Promise.all([
@@ -595,6 +602,16 @@ export function HistoryView({
       setActionError("当前仓库没有可抓取的远端");
       return;
     }
+    if (kind === "push" && currentLocalBranch && !currentLocalBranch.upstream) {
+      if (remoteNames.length === 0) {
+        setActionError("当前仓库没有可用于发布分支的远端");
+        return;
+      }
+      setMoreMenuOpen(false);
+      setPublishBranchError(null);
+      setPublishBranchOpen(true);
+      return;
+    }
 
     setOperationAction(kind);
     setActionError(null);
@@ -625,6 +642,34 @@ export function HistoryView({
     } catch (cause) {
       setOperationAction(null);
       setActionError(errorMessage(cause));
+    }
+  }
+
+  async function confirmPublishBranch(input: PublishBranchInput) {
+    if (remoteOperationBusy || !currentLocalBranch) return;
+    const repositoryPath = project.path;
+    setOperationAction("push");
+    setPublishBranchError(null);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const started = await desktopApi.repository.publishBranch(repositoryPath, input);
+      if (activeRepositoryPath.current !== repositoryPath) return;
+      setPublishBranchOpen(false);
+      onOperationStarted({
+        operationId: started.operationId,
+        repositoryPath,
+        kind: "push",
+        state: "queued",
+        phase: "queued",
+        percent: null,
+        message: `正在等待发布到 ${input.remoteName}/${input.remoteBranchName}`,
+        remoteTagDeletePreview: null,
+      });
+    } catch (cause) {
+      if (activeRepositoryPath.current !== repositoryPath) return;
+      setOperationAction(null);
+      setPublishBranchError(errorMessage(cause));
     }
   }
 
@@ -1352,16 +1397,19 @@ export function HistoryView({
               <CloudArrowDown size={14} weight="bold" aria-hidden="true" />
             </button>
             <button
+              ref={pushButtonRef}
               className="icon-button"
               type="button"
               disabled={
                 remoteOperationBusy ||
-                !currentLocalBranch?.upstream ||
-                currentLocalBranch.upstreamMissing
+                !currentLocalBranch ||
+                (currentLocalBranch.upstream
+                  ? currentLocalBranch.upstreamMissing
+                  : remoteNames.length === 0)
               }
               onClick={() => void runRemoteOperation("push")}
-              aria-label="推送当前分支"
-              title="推送当前分支"
+              aria-label={currentLocalBranch?.upstream ? "推送当前分支" : "发布当前分支"}
+              title={currentLocalBranch?.upstream ? "推送当前分支" : "发布当前分支到新远端分支"}
             >
               <CloudArrowUp size={14} weight="bold" aria-hidden="true" />
             </button>
@@ -1437,8 +1485,10 @@ export function HistoryView({
                       role="menuitem"
                       disabled={
                         remoteOperationBusy ||
-                        !currentLocalBranch?.upstream ||
-                        currentLocalBranch.upstreamMissing
+                        !currentLocalBranch ||
+                        (currentLocalBranch.upstream
+                          ? currentLocalBranch.upstreamMissing
+                          : remoteNames.length === 0)
                       }
                       onClick={() => {
                         setMoreMenuOpen(false);
@@ -1446,7 +1496,7 @@ export function HistoryView({
                       }}
                     >
                       <CloudArrowUp size={14} aria-hidden="true" />
-                      <span>推送当前分支</span>
+                      <span>{currentLocalBranch?.upstream ? "推送当前分支" : "发布当前分支"}</span>
                     </button>
                     <button
                       className="history-more-operation"
@@ -2193,6 +2243,31 @@ export function HistoryView({
             </button>
           </div>
         </Dialog>
+      ) : null}
+
+      {publishBranchOpen && currentLocalBranch ? (
+        <PublishBranchDialog
+          branch={{
+            name: currentLocalBranch.name,
+            fullName: currentLocalBranch.fullName,
+            kind: "local",
+            current: true,
+            oid: currentLocalBranch.oid,
+            upstream: currentLocalBranch.upstream,
+            upstreamMissing: currentLocalBranch.upstreamMissing,
+            ahead: currentLocalBranch.ahead,
+            behind: currentLocalBranch.behind,
+          }}
+          busy={operationAction === "push"}
+          error={publishBranchError}
+          remoteNames={remoteNames}
+          returnFocusElement={pushButtonRef.current}
+          onClose={() => {
+            setPublishBranchOpen(false);
+            setPublishBranchError(null);
+          }}
+          onPublish={(input) => void confirmPublishBranch(input)}
+        />
       ) : null}
 
       {mergeDialog ? (

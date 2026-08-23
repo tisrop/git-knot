@@ -11,8 +11,8 @@ use crate::domain::{
     CherryPickCommitPreview, CommitDetails, CommitInput, CommitSummary, ConflictDetails,
     ConflictResolutionChoice, ConflictResolutionInput, ConflictSide, GitVersion, HistoryPage,
     HistoryQuery, ImageDiff, ImagePreview, LocalMergeMode, LocalMergePreview, LocalMergeStrategy,
-    MergeRecoveryInput, MergeRecoveryPreview, RemoteCreateInput, RemoteDeleteInput,
-    RemoteDeletePreview, RemoteEditPreview, RemoteInfo, RemoteTagDeleteInput,
+    MergeRecoveryInput, MergeRecoveryPreview, PublishBranchInput, RemoteCreateInput,
+    RemoteDeleteInput, RemoteDeletePreview, RemoteEditPreview, RemoteInfo, RemoteTagDeleteInput,
     RemoteTagDeletePreview, RemoteTagDeletePreviewInput, RemoteTagPushInput, RemoteUpdateInput,
     RepositoryRefs, RepositoryStashes, RepositoryStatus, RepositorySubmodules, RepositoryTags,
     RepositoryWorktrees, ResetCommitInput, ResetCommitMode, ResetCommitPreview, RevertCommitInput,
@@ -3732,6 +3732,121 @@ pub fn push_current_branch(
     )
 }
 
+/// Publishes the current local branch as a new remote branch and configures it
+/// as upstream. The empty force-with-lease expectation makes the remote write
+/// create-only, including when another writer creates the target concurrently.
+pub fn publish_current_branch(
+    path: &Path,
+    input: &PublishBranchInput,
+    cancellation: Arc<AtomicBool>,
+    progress: Arc<dyn Fn(FetchProgress) + Send + Sync>,
+) -> Result<(), CommandError> {
+    let deadline = OperationDeadline::new(PUSH_TIMEOUT);
+    let root = repository_root(path)?;
+    validate_oid(&input.expected_local_oid)?;
+    let remote_name = validate_remote_name(&root, &input.remote_name)?;
+    validate_branch_name(&root, &input.remote_branch_name)?;
+    let refs = repository_refs(&root)?;
+    let current = refs
+        .branches
+        .iter()
+        .find(|branch| branch.current && matches!(branch.kind, BranchKind::Local))
+        .ok_or_else(|| {
+            CommandError::new(
+                "push_detached_head",
+                "当前处于 detached HEAD，无法发布远端分支",
+            )
+        })?;
+    if current.upstream.is_some() {
+        return Err(CommandError::new(
+            "publish_upstream_exists",
+            "当前分支已经配置远端上游，请使用普通 Push",
+        ));
+    }
+    if current.full_name != input.local_full_name
+        || current.oid != input.expected_local_oid.to_ascii_lowercase()
+    {
+        return Err(CommandError::new(
+            "publish_local_branch_changed",
+            "当前分支在确认后发生变化，请刷新后重试",
+        ));
+    }
+    if !refs.remotes.iter().any(|remote| remote.name == remote_name) {
+        return Err(CommandError::new(
+            "remote_not_found",
+            "目标远端已不存在，请刷新后重试",
+        ));
+    }
+    if cancellation.load(Ordering::SeqCst) {
+        return Err(CommandError::new(
+            "git_operation_cancelled",
+            PUSH_CANCELLED_MESSAGE,
+        ));
+    }
+
+    let (_, remote_url) = single_remote_push_url(&root, &remote_name)?;
+    let remote_full_name = format!("refs/heads/{}", input.remote_branch_name);
+    let mut inspect_command = git_command(Some(&root), GitLocking::Required);
+    inspect_command
+        .args(["ls-remote", "--refs", "--heads", "--"])
+        .arg(&remote_url)
+        .arg(&remote_full_name)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut inspect_command);
+    let existing = run_network_output_process(
+        inspect_command,
+        Arc::clone(&cancellation),
+        deadline,
+        PUSH_CANCELLED_MESSAGE,
+        PUSH_TIMEOUT_MESSAGE,
+        fetch_failure,
+    )?;
+    if !existing.is_empty() {
+        return Err(CommandError::new(
+            "publish_remote_branch_exists",
+            "远端分支已经存在，请更换名称或先创建本地跟踪分支",
+        ));
+    }
+
+    progress(FetchProgress {
+        phase: "publishing".to_owned(),
+        percent: None,
+        message: format!(
+            "正在发布 {} 到 {remote_name}/{}",
+            current.name, input.remote_branch_name
+        ),
+    });
+
+    let lease = format!("--force-with-lease={remote_full_name}:");
+    let refspec = format!("{}:{remote_full_name}", current.full_name);
+    let mut command = git_command(Some(&root), GitLocking::Required);
+    command
+        .args(["push", "--progress", "--set-upstream"])
+        .arg(lease)
+        .arg("--")
+        .arg(&remote_name)
+        .arg(refspec)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    run_network_process(
+        command,
+        cancellation,
+        progress,
+        deadline,
+        PUSH_CANCELLED_MESSAGE,
+        PUSH_TIMEOUT_MESSAGE,
+        publish_branch_failure,
+    )
+}
+
 /// Publishes one previously-read local tag to one configured remote.
 ///
 /// The UI cannot provide a URL, refspec, force mode, or extra Git flags. An
@@ -3748,7 +3863,7 @@ pub fn push_remote_tag(
     let root = repository_root(path)?;
     let tag = load_expected_local_tag(&root, &input.full_name, &input.expected_local_oid)?;
     let remote_name = validate_remote_name(&root, &input.remote_name)?;
-    let remote_url = remote_tag_push_url(&root, &remote_name)?.1;
+    let remote_url = single_remote_push_url(&root, &remote_name)?.1;
 
     if cancellation.load(Ordering::SeqCst) {
         return Err(CommandError::new(
@@ -3802,7 +3917,7 @@ pub fn preview_remote_tag_delete(
     let root = repository_root(path)?;
     let tag = load_expected_local_tag(&root, &input.full_name, &input.expected_local_oid)?;
     let remote_name = validate_remote_name(&root, &input.remote_name)?;
-    let (remote_snapshot, remote_url) = remote_tag_push_url(&root, &remote_name)?;
+    let (remote_snapshot, remote_url) = single_remote_push_url(&root, &remote_name)?;
 
     if cancellation.load(Ordering::SeqCst) {
         return Err(CommandError::new(
@@ -3869,7 +3984,7 @@ pub fn delete_remote_tag(
     validate_remote_tag_oid(&input.expected_remote_oid)?;
     validate_remote_token(&input.expected_token)?;
     let remote_name = validate_remote_name(&root, &input.remote_name)?;
-    let (remote_snapshot, remote_url) = remote_tag_push_url(&root, &remote_name)?;
+    let (remote_snapshot, remote_url) = single_remote_push_url(&root, &remote_name)?;
     let current_token = remote_tag_delete_token(
         token_namespace,
         &remote_snapshot,
@@ -5384,7 +5499,7 @@ fn load_expected_local_tag(
     Ok(tag)
 }
 
-fn remote_tag_push_url(
+fn single_remote_push_url(
     repository: &Path,
     remote_name: &str,
 ) -> Result<(RemoteSnapshot, String), CommandError> {
@@ -5392,7 +5507,7 @@ fn remote_tag_push_url(
     if snapshot.effective_push_urls.len() != 1 || snapshot.explicit_push_urls.len() > 1 {
         return Err(CommandError::new(
             "remote_multiple_push_urls_unsupported",
-            "该远端配置了多个 Push 地址，暂不支持远端标签操作",
+            "该远端配置了多个 Push 地址，暂不支持此远端写操作",
         ));
     }
     let remote_url = validate_remote_url(&snapshot.effective_push_urls[0])?;
@@ -6482,6 +6597,20 @@ fn push_failure(status: ExitStatus, stderr: &[u8]) -> CommandError {
             |code| format!("Push 失败（Git 退出码 {code}）"),
         ),
     )
+}
+
+fn publish_branch_failure(status: ExitStatus, stderr: &[u8]) -> CommandError {
+    let normalized = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if normalized.contains("stale info")
+        || normalized.contains("non-fast-forward")
+        || normalized.contains("fetch first")
+    {
+        return CommandError::new(
+            "publish_remote_branch_exists",
+            "远端分支已经存在，请更换名称或先创建本地跟踪分支",
+        );
+    }
+    push_failure(status, stderr)
 }
 
 fn remote_tag_push_failure(status: ExitStatus, stderr: &[u8]) -> CommandError {
@@ -9448,6 +9577,113 @@ mod tests {
         .unwrap();
         let client_oid = execute(Some(&client), &["rev-parse", "HEAD"]).unwrap();
         assert_eq!(remote_oid.stdout, client_oid.stdout);
+    }
+
+    #[test]
+    fn publishes_a_new_remote_branch_and_sets_upstream() {
+        let directory = tempdir().unwrap();
+        let remote = directory.path().join("remote.git");
+        let client = directory.path().join("client");
+        fs::create_dir(&remote).unwrap();
+        fs::create_dir(&client).unwrap();
+        run_git(&remote, &["init", "--bare", "--quiet"]);
+        initialize_repository(&client);
+        fs::write(client.join("base.txt"), "base\n").unwrap();
+        run_git(&client, &["add", "base.txt"]);
+        run_git(&client, &["commit", "--quiet", "-m", "Base"]);
+        run_git(
+            &client,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        let local_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+
+        publish_current_branch(
+            &client,
+            &PublishBranchInput {
+                local_full_name: git_stdout(&client, &["symbolic-ref", "HEAD"]),
+                remote_name: "origin".to_owned(),
+                remote_branch_name: "feature/published".to_owned(),
+                expected_local_oid: local_oid.clone(),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap();
+
+        assert_eq!(
+            git_stdout(&remote, &["rev-parse", "refs/heads/feature/published"]),
+            local_oid
+        );
+        assert_eq!(
+            git_stdout(&client, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+            "origin/feature/published"
+        );
+    }
+
+    #[test]
+    fn publish_branch_refuses_stale_local_and_existing_remote_branches() {
+        let directory = tempdir().unwrap();
+        let remote = directory.path().join("remote.git");
+        let client = directory.path().join("client");
+        fs::create_dir(&remote).unwrap();
+        fs::create_dir(&client).unwrap();
+        run_git(&remote, &["init", "--bare", "--quiet"]);
+        initialize_repository(&client);
+        fs::write(client.join("base.txt"), "base\n").unwrap();
+        run_git(&client, &["add", "base.txt"]);
+        run_git(&client, &["commit", "--quiet", "-m", "Base"]);
+        run_git(
+            &client,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        let local_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+        let input = PublishBranchInput {
+            local_full_name: git_stdout(&client, &["symbolic-ref", "HEAD"]),
+            remote_name: "origin".to_owned(),
+            remote_branch_name: "feature/published".to_owned(),
+            expected_local_oid: local_oid.clone(),
+        };
+
+        let stale = publish_current_branch(
+            &client,
+            &PublishBranchInput {
+                expected_local_oid: "f".repeat(40),
+                ..input.clone()
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap_err();
+        assert_eq!(stale.code, "publish_local_branch_changed");
+
+        let original_branch = git_stdout(&client, &["branch", "--show-current"]);
+        run_git(&client, &["switch", "--quiet", "-c", "other-local"]);
+        let switched = publish_current_branch(
+            &client,
+            &input,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap_err();
+        assert_eq!(switched.code, "publish_local_branch_changed");
+        run_git(&client, &["switch", "--quiet", "--", &original_branch]);
+
+        publish_current_branch(
+            &client,
+            &input,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap();
+        run_git(&client, &["branch", "--unset-upstream"]);
+        let existing = publish_current_branch(
+            &client,
+            &input,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap_err();
+        assert_eq!(existing.code, "publish_remote_branch_exists");
     }
 
     #[test]

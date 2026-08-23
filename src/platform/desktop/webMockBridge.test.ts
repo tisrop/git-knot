@@ -515,6 +515,72 @@ describe("web mock push operation", () => {
   });
 });
 
+describe("web mock branch publishing", () => {
+  let publishBridge: DesktopApi;
+  const path = "/Users/demo/projects/git-knot";
+
+  beforeEach(async () => {
+    vi.resetModules();
+    publishBridge = (await import("./webMockBridge")).webMockBridge;
+  });
+
+  it("创建远端分支并设置为当前分支上游", async () => {
+    vi.useFakeTimers();
+    await publishBridge.repository.createBranch(path, "feature/local-only");
+    const before = await publishBridge.repository.refs(path);
+    const current = before.branches.find((branch) => branch.current && branch.kind === "local")!;
+    expect(current.upstream).toBeNull();
+
+    const started = await publishBridge.repository.publishBranch(path, {
+      localFullName: current.fullName,
+      remoteName: "origin",
+      remoteBranchName: "feature/published",
+      expectedLocalOid: current.oid,
+    });
+    expect(started.operationId).toContain("mock-publish");
+    await vi.advanceTimersByTimeAsync(500);
+
+    const after = await publishBridge.repository.refs(path);
+    const publishedLocal = after.branches.find(
+      (branch) => branch.current && branch.kind === "local",
+    );
+    expect(publishedLocal?.upstream).toBe("origin/feature/published");
+    expect(after.branches).toContainEqual(
+      expect.objectContaining({
+        kind: "remote",
+        name: "origin/feature/published",
+        oid: current.oid,
+      }),
+    );
+  });
+
+  it("拒绝覆盖已存在的远端分支", async () => {
+    vi.useFakeTimers();
+    await publishBridge.repository.createBranch(path, "feature/first-local");
+    let refs = await publishBridge.repository.refs(path);
+    let current = refs.branches.find((branch) => branch.current && branch.kind === "local")!;
+    await publishBridge.repository.publishBranch(path, {
+      localFullName: current.fullName,
+      remoteName: "origin",
+      remoteBranchName: "feature/published",
+      expectedLocalOid: current.oid,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+
+    await publishBridge.repository.createBranch(path, "feature/second-local");
+    refs = await publishBridge.repository.refs(path);
+    current = refs.branches.find((branch) => branch.current && branch.kind === "local")!;
+    await expect(
+      publishBridge.repository.publishBranch(path, {
+        localFullName: current.fullName,
+        remoteName: "origin",
+        remoteBranchName: "feature/published",
+        expectedLocalOid: current.oid,
+      }),
+    ).rejects.toThrow("远端分支已经存在");
+  });
+});
+
 describe("web mock sync operation", () => {
   it("按 Pull 后 Push 的顺序发送同步生命周期", async () => {
     vi.useFakeTimers();

@@ -47,6 +47,16 @@ pub struct RemoteInfo {
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PublishBranchInput {
+    pub local_full_name: String,
+    pub remote_name: String,
+    pub remote_branch_name: String,
+    pub expected_local_oid: String,
+}
+
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteCreateInput {
     pub name: String,
     pub fetch_url: String,

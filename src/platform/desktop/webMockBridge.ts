@@ -2629,6 +2629,107 @@ export const webMockBridge: DesktopApi = {
       );
       return { operationId };
     },
+    async publishBranch(path, input) {
+      const current = mockBranches.find((branch) => branch.current && branch.kind === "local");
+      if (!current) throw new Error("当前处于 detached HEAD，无法发布远端分支");
+      if (current.upstream) throw new Error("当前分支已经配置远端上游，请使用普通 Push");
+      if (current.fullName !== input.localFullName || current.oid !== input.expectedLocalOid) {
+        throw new Error("当前分支在确认后发生变化，请刷新后重试");
+      }
+      if (!mockRemotes.some((remote) => remote.name === input.remoteName)) {
+        throw new Error("目标远端已不存在，请刷新后重试");
+      }
+      if (!isValidMockBranchName(input.remoteBranchName)) {
+        throw new Error("分支名不合法，请检查空格、连续点号或 Git 不允许的字符");
+      }
+      const remoteBranchName = `${input.remoteName}/${input.remoteBranchName}`;
+      if (
+        mockBranches.some((branch) => branch.kind === "remote" && branch.name === remoteBranchName)
+      ) {
+        throw new Error("远端分支已经存在，请更换名称或先创建本地跟踪分支");
+      }
+
+      const operationId = `mock-publish-${++mockOperationSequence}`;
+      mockOperationMeta.set(operationId, {
+        repositoryPath: path,
+        kind: "push",
+        cancelMessage: "已取消 Push",
+      });
+      emitMockOperation({
+        operationId,
+        repositoryPath: path,
+        kind: "push",
+        state: "queued",
+        phase: "queued",
+        percent: null,
+        message: `正在等待发布到 ${remoteBranchName}`,
+      });
+      scheduleMockOperation(
+        operationId,
+        () => {
+          emitMockOperation({
+            operationId,
+            repositoryPath: path,
+            kind: "push",
+            state: "running",
+            phase: "connecting",
+            percent: null,
+            message: `正在发布当前分支到 ${remoteBranchName}`,
+          });
+        },
+        20,
+      );
+      scheduleMockOperation(
+        operationId,
+        () => {
+          emitMockOperation({
+            operationId,
+            repositoryPath: path,
+            kind: "push",
+            state: "progress",
+            phase: "publishing",
+            percent: 68,
+            message: "正在上传远端对象",
+          });
+        },
+        180,
+      );
+      scheduleMockOperation(
+        operationId,
+        () => {
+          mockBranches = [
+            ...mockBranches.map((branch) =>
+              branch.fullName === current.fullName
+                ? { ...branch, upstream: remoteBranchName, upstreamMissing: false, ahead: 0 }
+                : branch,
+            ),
+            {
+              name: remoteBranchName,
+              fullName: `refs/remotes/${remoteBranchName}`,
+              kind: "remote",
+              current: false,
+              oid: current.oid,
+              upstream: null,
+              upstreamMissing: false,
+              ahead: 0,
+              behind: 0,
+            },
+          ];
+          emitMockOperation({
+            operationId,
+            repositoryPath: path,
+            kind: "push",
+            state: "succeeded",
+            phase: "completed",
+            percent: 100,
+            message: `已发布当前分支到 ${remoteBranchName} 并设置上游`,
+          });
+          finishMockOperation(operationId);
+        },
+        420,
+      );
+      return { operationId };
+    },
     async sync(path) {
       const current = mockBranches.find((branch) => branch.current && branch.kind === "local");
       if (!current) throw new Error("当前处于 detached HEAD，无法同步");
