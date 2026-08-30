@@ -91,6 +91,7 @@ interface PendingUndoCommit {
 
 interface PendingPushTarget {
   branch: BranchInfo;
+  commitBeforePush: boolean;
   refs: RepositoryRefs;
 }
 
@@ -710,7 +711,7 @@ export function WorkspaceView({
     }
   }
 
-  async function openCommitPushTarget() {
+  async function openPushTarget(commitBeforePush: boolean) {
     if (mutationBlocked()) return;
     const repositoryPath = project.path;
     setBusyAction("load-push-target");
@@ -724,9 +725,37 @@ export function WorkspaceView({
       );
       if (!branch) throw new Error("当前处于 detached HEAD，无法推送当前分支");
       if (refs.remotes.length === 0) throw new Error("当前仓库没有可用于推送的远端");
-      setPendingPushTarget({ branch, refs });
+      setPendingPushTarget({ branch, commitBeforePush, refs });
     } catch (cause) {
       if (activeRepositoryPath.current === repositoryPath) onError(errorMessage(cause));
+    } finally {
+      if (activeRepositoryPath.current === repositoryPath) setBusyAction(null);
+    }
+  }
+
+  async function pushSelectedTarget(input: PushBranchTargetInput) {
+    if (mutationBlocked()) return;
+    const repositoryPath = project.path;
+    setBusyAction("push-target");
+    setNotice(null);
+    setPushTargetError(null);
+    try {
+      const started = await desktopApi.repository.pushBranchTarget(repositoryPath, input);
+      if (activeRepositoryPath.current !== repositoryPath) return;
+      setPendingPushTarget(null);
+      onOperationStarted({
+        operationId: started.operationId,
+        repositoryPath,
+        kind: "push",
+        state: "queued",
+        phase: "queued",
+        percent: null,
+        message: `正在等待推送到 ${input.remoteName}/${input.remoteBranchName}`,
+        remoteTagDeletePreview: null,
+      });
+      setNotice(`正在推送到 ${input.remoteName}/${input.remoteBranchName}`);
+    } catch (cause) {
+      if (activeRepositoryPath.current === repositoryPath) setPushTargetError(errorMessage(cause));
     } finally {
       if (activeRepositoryPath.current === repositoryPath) setBusyAction(null);
     }
@@ -999,12 +1028,14 @@ export function WorkspaceView({
     !commitSubject ||
     !amendPreview?.canAmend;
   const syncCommitDisabled = commitDisabled || !status?.branch.upstream;
+  const pushDisabled =
+    busy || mergeRecovery !== null || groups.conflicted.length > 0 || !status?.branch.oid;
   const amendDisabled =
     busy || mergeRecovery !== null || groups.conflicted.length > 0 || !status?.branch.oid;
   const amendSubmitDisabled = amendDisabled;
   const undoDisabled =
     busy || mergeRecovery !== null || !status?.branch.oid || (status?.changes.length ?? 0) > 0;
-  const commitMenuDisabled = commitDisabled && amendDisabled && undoDisabled;
+  const commitMenuDisabled = commitDisabled && pushDisabled && amendDisabled && undoDisabled;
 
   function handleCommitMessageKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (
@@ -1264,7 +1295,7 @@ export function WorkspaceView({
                     disabled={commitDisabled}
                     onClick={() => {
                       setCommitMenuOpen(false);
-                      void openCommitPushTarget();
+                      void openPushTarget(true);
                     }}
                   >
                     提交和推送…
@@ -1280,6 +1311,17 @@ export function WorkspaceView({
                     }}
                   >
                     提交和同步
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={pushDisabled}
+                    onClick={() => {
+                      setCommitMenuOpen(false);
+                      void openPushTarget(false);
+                    }}
+                  >
+                    推送…
                   </button>
                   <div className="commit-menu-separator" role="separator" />
                   <button
@@ -1631,6 +1673,7 @@ export function WorkspaceView({
       {pendingPushTarget ? (
         <PushBranchTargetDialog
           branch={pendingPushTarget.branch}
+          commitBeforePush={pendingPushTarget.commitBeforePush}
           refs={pendingPushTarget.refs}
           busy={busy}
           error={pushTargetError}
@@ -1639,7 +1682,11 @@ export function WorkspaceView({
             setPendingPushTarget(null);
             setPushTargetError(null);
           }}
-          onPush={(input) => void createNewCommit("push-target", input)}
+          onPush={(input) =>
+            pendingPushTarget.commitBeforePush
+              ? void createNewCommit("push-target", input)
+              : void pushSelectedTarget(input)
+          }
         />
       ) : null}
 

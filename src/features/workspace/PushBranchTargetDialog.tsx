@@ -9,6 +9,7 @@ type TargetMode = "existing" | "new";
 interface PushBranchTargetDialogProps {
   branch: BranchInfo;
   busy: boolean;
+  commitBeforePush: boolean;
   error: string | null;
   onClose: () => void;
   onPush: (input: PushBranchTargetInput) => void;
@@ -19,6 +20,7 @@ interface PushBranchTargetDialogProps {
 export function PushBranchTargetDialog({
   branch,
   busy,
+  commitBeforePush,
   error,
   onClose,
   onPush,
@@ -38,6 +40,8 @@ export function PushBranchTargetDialog({
   const remoteTargets = targets.filter((target) => target.remoteName === remoteName);
   const selectedExisting =
     remoteTargets.find((target) => target.fullName === existingFullName) ?? null;
+  const displayedBranchName =
+    mode === "existing" ? (selectedExisting?.branchName ?? "") : newBranchName.trim();
   const canPush =
     mode === "existing" ? selectedExisting !== null : Boolean(remoteName && newBranchName.trim());
 
@@ -74,10 +78,11 @@ export function PushBranchTargetDialog({
       onClose={onClose}
       onSubmit={submit}
     >
-      <p className="eyebrow">COMMIT AND PUSH</p>
+      <p className="eyebrow">{commitBeforePush ? "COMMIT AND PUSH" : "PUSH BRANCH"}</p>
       <h2 id="push-target-dialog-title">选择推送目标</h2>
       <p id="push-target-dialog-description">
-        提交后将 <strong>{branch.name}</strong> 推送到所选目标，并设置为当前分支的上游。
+        {commitBeforePush ? "提交后将" : "将"} <strong>{branch.name}</strong>{" "}
+        推送到所选目标，并设置为当前分支的上游。
       </p>
 
       <div className="push-target-mode" role="group" aria-label="远端分支目标类型">
@@ -160,9 +165,7 @@ export function PushBranchTargetDialog({
         <div>
           <dt>推送到</dt>
           <dd>
-            {remoteName && (selectedExisting || newBranchName.trim())
-              ? `${remoteName}/${selectedExisting?.branchName ?? newBranchName.trim()}`
-              : "-"}
+            {remoteName && displayedBranchName ? `${remoteName}/${displayedBranchName}` : "-"}
           </dd>
         </div>
       </dl>
@@ -181,7 +184,13 @@ export function PushBranchTargetDialog({
           取消
         </button>
         <button className="primary-button" type="submit" disabled={busy || !canPush}>
-          {busy ? "提交并推送中…" : "提交并推送"}
+          {busy
+            ? commitBeforePush
+              ? "提交并推送中…"
+              : "启动推送中…"
+            : commitBeforePush
+              ? "提交并推送"
+              : "推送"}
         </button>
       </div>
     </Dialog>
