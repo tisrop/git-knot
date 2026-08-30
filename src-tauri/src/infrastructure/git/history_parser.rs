@@ -17,8 +17,10 @@ pub fn parse_history(output: &[u8]) -> Result<Vec<CommitSummary>, CommandError> 
     }
 
     fields
-        .chunks_exact(HISTORY_FIELD_COUNT)
-        .map(parse_summary_fields)
+        .as_chunks::<HISTORY_FIELD_COUNT>()
+        .0
+        .iter()
+        .map(|chunk| parse_summary_fields(chunk))
         .collect()
 }
 
