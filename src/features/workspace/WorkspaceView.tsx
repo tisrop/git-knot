@@ -1397,7 +1397,7 @@ export function WorkspaceView({
                       void beginAmend("submit");
                     }}
                   >
-                    提交(修改)
+                    提交(修改)…
                   </button>
                   <button
                     type="button"
@@ -1443,7 +1443,7 @@ export function WorkspaceView({
                       void beginAmend("edit-message");
                     }}
                   >
-                    修改上次提交信息
+                    修改上次提交信息…
                   </button>
                   <button
                     type="button"
@@ -1454,7 +1454,7 @@ export function WorkspaceView({
                       void beginUndoLastCommit("soft");
                     }}
                   >
-                    撤销上次提交，保留更改
+                    撤销上次提交，保留更改…
                   </button>
                   <button
                     type="button"
@@ -1465,7 +1465,7 @@ export function WorkspaceView({
                       void beginUndoLastCommit("mixed");
                     }}
                   >
-                    撤销上次提交，取消暂存
+                    撤销上次提交，取消暂存…
                   </button>
                 </div>,
                 document.body,

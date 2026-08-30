@@ -57,6 +57,7 @@
   --radius-surface: 12px;
   --radius-control: 8px;
   --radius-small: 6px;
+  --disabled-opacity: 0.48;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   color: var(--text-1);
   background: var(--app-bg);
@@ -161,7 +162,7 @@ button:disabled,
 input:disabled,
 textarea:disabled,
 select:disabled {
-  opacity: 0.48;
+  opacity: var(--disabled-opacity);
 }
 
 .app-shell {
@@ -1468,7 +1469,7 @@ button:disabled {
 
 .commit-menu-popover > button:disabled {
   color: var(--text-3);
-  opacity: 0.55;
+  opacity: var(--disabled-opacity);
 }
 
 .commit-menu-separator {
@@ -1874,7 +1875,7 @@ select,
 
 .project-context-menu > button:disabled {
   cursor: not-allowed;
-  opacity: 0.4;
+  opacity: var(--disabled-opacity);
 }
 
 .project-context-separator {
@@ -2051,7 +2052,7 @@ select,
 
 .commit-context-menu > button:disabled {
   cursor: not-allowed;
-  opacity: 0.38;
+  opacity: var(--disabled-opacity);
 }
 
 .commit-context-separator {
@@ -3746,7 +3747,7 @@ select optgroup {
 
 .history-more-popover button:disabled {
   color: var(--text-3);
-  opacity: 0.55;
+  opacity: var(--disabled-opacity);
 }
 
 .history-more-separator {
@@ -5721,7 +5722,7 @@ pre,
 }
 
 .push-target-mode > button:disabled {
-  opacity: 0.45;
+  opacity: var(--disabled-opacity);
 }
 
 .push-target-fields {
