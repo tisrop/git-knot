@@ -166,6 +166,11 @@ export interface RepositoryApi {
   amendAndPush(path: string, input: Domain.AmendAndPushInput): Promise<Domain.GitOperationStarted>;
   previewAmendCommit(path: string): Promise<Domain.AmendCommitPreview>;
   amendCommit(path: string, input: Domain.AmendCommitInput): Promise<Domain.AmendCommitCreated>;
+  watchWorkspace(path: string): Promise<void>;
+  unwatchWorkspace(): Promise<void>;
+  subscribeWorkspaceChanges(
+    listener: (event: Domain.WorkspaceChangedEvent) => void,
+  ): Promise<() => void>;
 }
 
 export interface GitOperationsApi {

@@ -39,7 +39,7 @@ pub use workspace::{
     AmendAndPushInput, AmendAndPushPreview, AmendCommitCreated, AmendCommitInput,
     AmendCommitPreview, CommitCreated, CommitInput, ConflictDetails, ConflictResolutionChoice,
     ConflictResolutionInput, ConflictSide, MergeRecoveryInput, MergeRecoveryPreview,
-    RepositoryMutationResult, WorktreeDiff,
+    RepositoryMutationResult, WorkspaceChangedEvent, WorktreeDiff, WORKSPACE_CHANGED_EVENT,
 };
 pub use worktree::{
     RepositoryWorktrees, WorktreeCreateCandidate, WorktreeCreateInput, WorktreeInfo,

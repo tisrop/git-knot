@@ -46,6 +46,7 @@ import { RepositoryWorkbenchView } from "../features/repository/RepositoryWorkbe
 import {
   isCurrentRepositoryStatusRequest,
   isCurrentStatusRequest,
+  repositoryStatusEquals,
 } from "../features/repository/status";
 import { CloneRepositoryDialog } from "../features/projects/CloneRepositoryDialog";
 import { UpdateControl } from "../features/updates/UpdateControl";
@@ -79,6 +80,14 @@ interface ProjectContextMenuState {
   x: number;
   y: number;
 }
+
+/**
+ * Collapses bursts of filesystem notifications for the watched repository into
+ * a single status read. The Rust watcher already debounces; this second, much
+ * shorter window only absorbs events that cross the process boundary
+ * separately.
+ */
+const WORKSPACE_REFRESH_DEBOUNCE_MS = 200;
 
 function errorMessage(error: unknown) {
   if (typeof error === "string") return error;
@@ -125,6 +134,8 @@ export function App() {
   projectsRef.current = projects;
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedId) ?? null,
@@ -260,6 +271,55 @@ export function App() {
     },
     [cacheProjectStatus, readRepositoryStatus, repositoryStatusRequestId],
   );
+
+  /**
+   * Re-reads status without touching any visible loading or error state.
+   *
+   * Used by the filesystem watcher and the window focus fallback: the user did
+   * not ask for this refresh, so it must not disable buttons, clear an error
+   * banner, or replace the status object when nothing actually changed.
+   */
+  const silentRefresh = useCallback(
+    async (project: Project) => {
+      // Do not claim the selected-status request: a background read must never
+      // invalidate a load the user asked for.
+      const requestId = statusRequest.current;
+      // Drop any in-flight read that started before the change we were told
+      // about, otherwise it would report pre-change state.
+      const repositoryRequestId = invalidateRepositoryStatus(project.path);
+      try {
+        const nextStatus = await readRepositoryStatus(project);
+        if (
+          !isCurrentRepositoryStatusRequest(
+            statusRequest.current,
+            requestId,
+            repositoryStatusRequestId(project.path),
+            repositoryRequestId,
+          )
+        ) {
+          return;
+        }
+        if (selectedIdRef.current !== project.id) return;
+        if (repositoryStatusEquals(statusRef.current, nextStatus)) return;
+        cacheProjectStatus(project.id, nextStatus);
+        setStatus(nextStatus);
+      } catch {
+        // A background refresh must not interrupt the user; real failures
+        // still surface through the manual refresh button.
+      }
+    },
+    [
+      cacheProjectStatus,
+      invalidateRepositoryStatus,
+      readRepositoryStatus,
+      repositoryStatusRequestId,
+    ],
+  );
+
+  const refreshSelectedProjectSilently = useCallback(() => {
+    const project = projectsRef.current.find((item) => item.id === selectedIdRef.current);
+    if (project) void silentRefresh(project);
+  }, [silentRefresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -426,6 +486,72 @@ export function App() {
   useEffect(() => {
     void loadStatus(selectedProject);
   }, [loadStatus, selectedProject]);
+
+  const selectedProjectPath = selectedProject?.path ?? null;
+
+  useEffect(() => {
+    if (!selectedProjectPath) {
+      void desktopApi.repository.unwatchWorkspace().catch(() => {});
+      return;
+    }
+    // Only the open repository is observed. Starting a watch replaces the
+    // previous one, so switching repositories must not also issue a stop:
+    // the two commands are independent and a stop could land after the start.
+    // A failure here (an exhausted inotify budget, for example) degrades to
+    // manual refresh rather than interrupting the user with an error.
+    void desktopApi.repository.watchWorkspace(selectedProjectPath).catch(() => {});
+  }, [selectedProjectPath]);
+
+  useEffect(
+    () => () => {
+      void desktopApi.repository.unwatchWorkspace().catch(() => {});
+    },
+    [],
+  );
+
+  useEffect(() => {
+    let disposed = false;
+    let unsubscribe = () => {};
+    let refreshTimeout: number | null = null;
+
+    void desktopApi.repository
+      .subscribeWorkspaceChanges((event) => {
+        if (refreshTimeout !== null) window.clearTimeout(refreshTimeout);
+        refreshTimeout = window.setTimeout(() => {
+          refreshTimeout = null;
+          const project = projectsRef.current.find((item) => item.id === selectedIdRef.current);
+          // The watcher echoes back the path we asked it to observe, so a
+          // stale event from a repository we just left compares unequal.
+          if (project?.path === event.repositoryPath) void silentRefresh(project);
+        }, WORKSPACE_REFRESH_DEBOUNCE_MS);
+      })
+      .then((stop) => {
+        if (disposed) stop();
+        else unsubscribe = stop;
+      })
+      .catch(() => {});
+
+    return () => {
+      disposed = true;
+      if (refreshTimeout !== null) window.clearTimeout(refreshTimeout);
+      unsubscribe();
+    };
+  }, [silentRefresh]);
+
+  useEffect(() => {
+    // Fallback for anything the watcher could not report: it makes no delivery
+    // guarantee, and it may have failed to start altogether.
+    const refreshOnReturn = () => {
+      if (document.visibilityState === "hidden") return;
+      refreshSelectedProjectSilently();
+    };
+    window.addEventListener("focus", refreshOnReturn);
+    document.addEventListener("visibilitychange", refreshOnReturn);
+    return () => {
+      window.removeEventListener("focus", refreshOnReturn);
+      document.removeEventListener("visibilitychange", refreshOnReturn);
+    };
+  }, [refreshSelectedProjectSilently]);
 
   const handleSelectedStatusChange = useCallback(
     (nextStatus: RepositoryStatus) => {

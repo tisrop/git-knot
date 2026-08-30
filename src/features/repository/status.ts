@@ -1,4 +1,4 @@
-import type { RepositoryStatus } from "../../platform/desktop";
+import type { BranchStatus, FileChange, RepositoryStatus } from "../../platform/desktop";
 
 export interface StatusSummary {
   staged: number;
@@ -44,4 +44,45 @@ export function isCurrentRepositoryStatusRequest(
     isCurrentStatusRequest(activeStatusRequest, statusRequestId) &&
     isCurrentStatusRequest(activeRepositoryRequest, repositoryRequestId)
   );
+}
+
+function branchStatusEquals(left: BranchStatus, right: BranchStatus) {
+  return (
+    left.head === right.head &&
+    left.oid === right.oid &&
+    left.upstream === right.upstream &&
+    left.ahead === right.ahead &&
+    left.behind === right.behind
+  );
+}
+
+function fileChangeEquals(left: FileChange, right: FileChange) {
+  return (
+    left.path === right.path &&
+    left.originalPath === right.originalPath &&
+    left.indexStatus === right.indexStatus &&
+    left.worktreeStatus === right.worktreeStatus &&
+    left.kind === right.kind
+  );
+}
+
+/**
+ * Compares two status reads by value.
+ *
+ * Background refreshes must not hand React a new object when nothing changed:
+ * the workspace diff and merge recovery previews react to the status object's
+ * identity, so an identical-but-new object would reload them for no reason.
+ */
+export function repositoryStatusEquals(
+  left: RepositoryStatus | null,
+  right: RepositoryStatus | null,
+) {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.root !== right.root) return false;
+  if (!branchStatusEquals(left.branch, right.branch)) return false;
+  if (left.changes.length !== right.changes.length) return false;
+  // Git reports changes in a stable order, so a positional comparison is both
+  // sufficient and cheap.
+  return left.changes.every((change, index) => fileChangeEquals(change, right.changes[index]));
 }

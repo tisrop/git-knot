@@ -41,6 +41,28 @@ pub async fn repository_status(
 }
 
 #[tauri::command]
+pub async fn repository_watch_start(
+    app: AppHandle,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let watch = state.repository_watch.clone();
+    tauri::async_runtime::spawn_blocking(move || watch.start(app, path))
+        .await
+        .map_err(|error| task_error("仓库文件监听", error))?
+}
+
+#[tauri::command]
+pub async fn repository_watch_stop(state: State<'_, AppState>) -> Result<(), CommandError> {
+    let watch = state.repository_watch.clone();
+    // Stopping joins the watcher thread, so it does not belong on the async
+    // runtime's cooperative executor.
+    tauri::async_runtime::spawn_blocking(move || watch.stop())
+        .await
+        .map_err(|error| task_error("仓库文件监听", error))
+}
+
+#[tauri::command]
 pub async fn repository_history(
     path: String,
     query: HistoryQuery,

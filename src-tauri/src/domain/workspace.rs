@@ -1,6 +1,8 @@
 use super::{CommitSummary, ImageDiff, RepositoryStatus};
 use serde::{Deserialize, Serialize};
 
+pub const WORKSPACE_CHANGED_EVENT: &str = "repository://workspace-changed";
+
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -154,4 +156,14 @@ pub struct AmendCommitCreated {
     pub previous_oid: String,
     pub commit: CommitSummary,
     pub status: RepositoryStatus,
+}
+
+/// Emitted when the watched repository's worktree or Git state changed on
+/// disk. It carries no state on purpose: the frontend re-reads authoritative
+/// status instead of trusting a notification payload.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceChangedEvent {
+    pub repository_path: String,
 }

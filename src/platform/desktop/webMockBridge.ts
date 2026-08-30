@@ -3167,6 +3167,13 @@ export const webMockBridge: DesktopApi = {
       }
       return applyMockAmendCommit(path, preview, input.subject, input.body);
     },
+    // The browser preview has no filesystem to observe, so watching is a
+    // no-op and the manual refresh button remains the only trigger.
+    async watchWorkspace() {},
+    async unwatchWorkspace() {},
+    async subscribeWorkspaceChanges() {
+      return () => {};
+    },
   },
   gitOperations: {
     async subscribe(listener) {

@@ -15,8 +15,8 @@ use crate::domain::{
     RepositoryTagsMutationResult, RepositoryWorktrees, ResetCommitInput, ResetCommitMode,
     ResetCommitPreview, RevertCommitInput, RevertCommitPreview, StashCreateInput, StashInfo,
     SubmoduleInfo, SubmoduleState, TagInfo, UpdateCheckResult, UpdateProgressEvent,
-    WorktreeCreateCandidate, WorktreeCreateInput, WorktreeDiff, WorktreeInfo, WorktreeLockInput,
-    WorktreePruneInput, WorktreeUnlockInput,
+    WorkspaceChangedEvent, WorktreeCreateCandidate, WorktreeCreateInput, WorktreeDiff,
+    WorktreeInfo, WorktreeLockInput, WorktreePruneInput, WorktreeUnlockInput,
 };
 use std::fmt::Write as _;
 use std::fs;
@@ -113,6 +113,7 @@ fn generated_bindings() -> String {
     declare!(TagInfo);
     declare!(UpdateCheckResult);
     declare!(UpdateProgressEvent);
+    declare!(WorkspaceChangedEvent);
     declare!(WorktreeCreateCandidate);
     declare!(WorktreeCreateInput);
     declare!(WorktreeDiff);

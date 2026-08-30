@@ -56,6 +56,7 @@ import type {
   ResetCommitPreview,
   UpdateCheckResult,
   UpdateProgressEvent,
+  WorkspaceChangedEvent,
   WorktreeUnlockInput,
 } from "./contract";
 
@@ -246,6 +247,13 @@ export const tauriBridge: DesktopApi = {
       invoke<AmendCommitPreview>("repository_preview_amend_commit", { path }),
     amendCommit: (path, input: AmendCommitInput) =>
       invoke<AmendCommitCreated>("repository_amend_commit", { path, input }),
+    watchWorkspace: (path) => invoke<void>("repository_watch_start", { path }),
+    unwatchWorkspace: () => invoke<void>("repository_watch_stop"),
+    async subscribeWorkspaceChanges(listener) {
+      return listen<WorkspaceChangedEvent>("repository://workspace-changed", (event) =>
+        listener(event.payload),
+      );
+    },
   },
   gitOperations: {
     async subscribe(listener) {

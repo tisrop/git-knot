@@ -337,6 +337,7 @@ export function WorkspaceView({
   const [pendingPushTarget, setPendingPushTarget] = useState<PendingPushTarget | null>(null);
   const [pushTargetError, setPushTargetError] = useState<string | null>(null);
   const diffRequest = useRef(0);
+  const loadedDiffKey = useRef<string | null>(null);
   const mergeRecoveryRequest = useRef(0);
   const amendPreviewRequest = useRef(0);
   const resetPreviewRequest = useRef(0);
@@ -349,6 +350,7 @@ export function WorkspaceView({
 
   useEffect(() => {
     ++diffRequest.current;
+    loadedDiffKey.current = null;
     setSelected(null);
     setDiff(null);
     setConflictDetails(null);
@@ -516,6 +518,7 @@ export function WorkspaceView({
   useEffect(() => {
     if (!selected || !status) {
       ++diffRequest.current;
+      loadedDiffKey.current = null;
       setDiff(null);
       setConflictDetails(null);
       setLoadingDiff(false);
@@ -523,10 +526,18 @@ export function WorkspaceView({
     }
 
     const requestId = ++diffRequest.current;
-    setLoadingDiff(true);
+    const diffKey = `${selectedIsConflict ? "conflict" : "diff"} ${project.path} ${targetKey(selected)}`;
+    // A background refresh re-runs this effect for the file already on screen.
+    // Keep the current patch visible until the new one arrives; only switching
+    // targets is worth blanking the panel for.
+    const targetChanged = loadedDiffKey.current !== diffKey;
+    loadedDiffKey.current = diffKey;
+    if (targetChanged) {
+      setDiff(null);
+      setConflictDetails(null);
+      setLoadingDiff(true);
+    }
     setDiffError(null);
-    setDiff(null);
-    setConflictDetails(null);
     const request = selectedIsConflict
       ? desktopApi.repository.conflictDetails(project.path, selected.path)
       : desktopApi.repository.worktreeDiff(project.path, selected.path, selected.staged);
@@ -537,7 +548,10 @@ export function WorkspaceView({
         else setDiff(preview as WorktreeDiff);
       })
       .catch((cause) => {
-        if (diffRequest.current === requestId) setDiffError(errorMessage(cause));
+        if (diffRequest.current !== requestId) return;
+        setDiff(null);
+        setConflictDetails(null);
+        setDiffError(errorMessage(cause));
       })
       .finally(() => {
         if (diffRequest.current === requestId) setLoadingDiff(false);

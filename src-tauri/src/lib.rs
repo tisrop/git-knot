@@ -102,6 +102,8 @@ pub fn run() {
             commands::repository::repository_unlock_worktree,
             commands::repository::repository_prune_worktrees,
             commands::repository::repository_update_remote,
+            commands::repository::repository_watch_start,
+            commands::repository::repository_watch_stop,
             commands::repository::repository_worktree_diff,
             commands::repository::repository_worktrees,
             commands::update::update_check,
@@ -114,6 +116,7 @@ pub fn run() {
             if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
                 if let Some(state) = app.try_state::<AppState>() {
                     state.git_operations.cancel_all();
+                    state.repository_watch.stop();
                 }
             }
         });
