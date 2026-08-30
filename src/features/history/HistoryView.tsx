@@ -64,6 +64,7 @@ import {
   formatCommitDate,
   isCurrentRepositoryPath,
   appendUniqueCommitsWithLimit,
+  mergeRefreshedHistoryPage,
   LruCache,
   parseUnifiedDiff,
   patchForFile,
@@ -96,6 +97,10 @@ interface HistoryViewProps {
   onDiffFocus?: () => void;
   onStatusChange?: (status: RepositoryStatus) => void;
   refreshToken?: number;
+  /** Bumped when the repository changed on disk. Unlike `refreshToken` this
+   * reloads history in place: filters, selected ref, selected commit and the
+   * already-paged-in tail all survive. */
+  silentRefreshToken?: number;
   gitOperations: GitOperationEvent[];
   onOperationStarted: (operation: GitOperationEvent) => void;
   onCollapsedChange?: (collapsed: boolean) => void;
@@ -278,6 +283,7 @@ export function HistoryView({
   onDiffFocus,
   onStatusChange,
   refreshToken = 0,
+  silentRefreshToken = 0,
   gitOperations,
   onOperationStarted,
   onCollapsedChange,
@@ -335,10 +341,15 @@ export function HistoryView({
   const hoverCardRef = useRef<HTMLElement | null>(null);
   const historyRequest = useRef(0);
   const historyRefsRequest = useRef(0);
+  const silentRefreshRequest = useRef(0);
   const activeRepositoryPath = useRef(project.path);
   activeRepositoryPath.current = project.path;
   const activeFiltersRef = useRef(activeFilters);
   activeFiltersRef.current = activeFilters;
+  const commitsRef = useRef(commits);
+  commitsRef.current = commits;
+  const historyLoadModeRef = useRef(historyLoadMode);
+  historyLoadModeRef.current = historyLoadMode;
   const selectedRefFullNameRef = useRef(selectedRefFullName);
   selectedRefFullNameRef.current = selectedRefFullName;
   const handledTerminalOperations = useRef(new Set<string>());
@@ -465,6 +476,70 @@ export function HistoryView({
         }
       });
   }, [loadHistory, project.path, refreshToken]);
+
+  useEffect(() => {
+    if (silentRefreshToken === 0) return;
+    // A load the user asked for is authoritative; let it finish and catch up on
+    // the next notification.
+    if (historyLoadModeRef.current !== null) return;
+
+    const repositoryPath = project.path;
+    const silentRequestId = ++silentRefreshRequest.current;
+    const userRequestId = historyRequest.current;
+    const filters = activeFiltersRef.current;
+    const refFullName = selectedRefFullNameRef.current;
+    const refsRequestId = historyRefsRequest.current;
+
+    const stillCurrent = () =>
+      silentRefreshRequest.current === silentRequestId &&
+      historyRequest.current === userRequestId &&
+      activeRepositoryPath.current === repositoryPath;
+
+    void desktopApi.repository
+      .history(repositoryPath, historyQuery(filters, 0, refFullName))
+      .then((page) => {
+        if (!stillCurrent()) return;
+        const merged = mergeRefreshedHistoryPage(
+          commitsRef.current,
+          page.commits,
+          HISTORY_SOFT_LIMIT,
+        );
+        setCommits(merged.commits);
+        if (merged.replaced) {
+          // Nothing of the old list survived, so paging has to restart from
+          // what this page reports.
+          setHasMore(page.hasMore);
+          setNextOffset(page.nextOffset);
+          setHistoryLimitReached(false);
+        } else if (merged.commits.length !== commitsRef.current.length) {
+          // Offsets count from the top of the ref's history, so the next page
+          // starts after everything currently loaded.
+          setNextOffset(merged.commits.length);
+        }
+        if (merged.commits.length >= HISTORY_SOFT_LIMIT) {
+          setHistoryLimitReached(true);
+          setHasMore(false);
+        }
+        setHistoryError(null);
+      })
+      .catch(() => {
+        // Background refreshes stay quiet; the manual refresh path still
+        // reports failures.
+      });
+
+    void Promise.all([
+      desktopApi.repository.refs(repositoryPath),
+      desktopApi.repository.tags(repositoryPath),
+    ])
+      .then(([refs, tags]) => {
+        // Ref decorations and the ref picker have to follow an external
+        // checkout, commit or tag.
+        if (!stillCurrent() || historyRefsRequest.current !== refsRequestId) return;
+        setHistoryRefs(historyRefsFromData(refs.branches, tags.tags));
+        setRemoteNames(refs.remotes.map((remote) => remote.name));
+      })
+      .catch(() => {});
+  }, [project.path, silentRefreshToken]);
 
   const fetchRemoteName =
     remoteNames[0] ?? historyRefs.find((ref) => ref.kind === "remote")?.name.split("/")[0] ?? null;

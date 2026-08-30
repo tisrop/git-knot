@@ -43,10 +43,14 @@ impl RepositoryWatch {
     /// Starts watching `root` (the worktree) and `git_dir` (the Git common
     /// directory) and invokes `on_change` after each debounced burst of
     /// relevant events.
+    ///
+    /// The flag passed to `on_change` reports whether the burst touched the
+    /// Git directory. Worktree-only bursts cannot change refs or history, so
+    /// the frontend uses it to decide how much to re-read.
     pub fn start(
         root: &Path,
         git_dir: &Path,
-        on_change: impl Fn() + Send + 'static,
+        on_change: impl Fn(bool) + Send + 'static,
     ) -> Result<Self, CommandError> {
         let (sender, receiver) = mpsc::channel::<Event>();
         let mut watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
@@ -101,7 +105,7 @@ fn spawn_debouncer(
     receiver: Receiver<Event>,
     git_dir: PathBuf,
     stopped: Arc<AtomicBool>,
-    on_change: impl Fn() + Send + 'static,
+    on_change: impl Fn(bool) + Send + 'static,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let is_relevant = |event: &Event| {
@@ -109,6 +113,12 @@ fn spawn_debouncer(
                 .paths
                 .iter()
                 .any(|path| is_relevant_change(path, &git_dir))
+        };
+        let touches_git_dir = |event: &Event| {
+            event
+                .paths
+                .iter()
+                .any(|path| is_git_directory_change(path, &git_dir))
         };
 
         loop {
@@ -120,13 +130,19 @@ fn spawn_debouncer(
             if !is_relevant(&event) {
                 continue;
             }
+            let mut git_dir_changed = touches_git_dir(&event);
 
-            // Collapse the rest of the burst.
+            // Collapse the rest of the burst, remembering whether any part of
+            // it reached the Git directory.
             let burst_started = Instant::now();
             loop {
                 match receiver.recv_timeout(DEBOUNCE_INTERVAL) {
-                    Ok(_) if burst_started.elapsed() < MAX_COALESCE_WINDOW => continue,
-                    Ok(_) => break,
+                    Ok(event) => {
+                        git_dir_changed |= touches_git_dir(&event);
+                        if burst_started.elapsed() >= MAX_COALESCE_WINDOW {
+                            break;
+                        }
+                    }
                     Err(RecvTimeoutError::Timeout) => break,
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
@@ -135,7 +151,7 @@ fn spawn_debouncer(
             if stopped.load(Ordering::SeqCst) {
                 return;
             }
-            on_change();
+            on_change(git_dir_changed);
         }
     })
 }
@@ -176,6 +192,13 @@ pub(crate) fn is_relevant_change(path: &Path, git_dir: &Path) -> bool {
         .is_some_and(|name| name.ends_with(".lock"))
 }
 
+/// Whether a relevant change happened inside the Git directory rather than in
+/// the worktree. Only these can move refs, so only these need history and ref
+/// decorations re-read.
+pub(crate) fn is_git_directory_change(path: &Path, git_dir: &Path) -> bool {
+    path.starts_with(git_dir) && is_relevant_change(path, git_dir)
+}
+
 fn watch_error(error: notify::Error) -> CommandError {
     CommandError::new(
         "watch_start_failed",
@@ -204,6 +227,32 @@ mod tests {
     fn paths_outside_the_git_directory_are_relevant() {
         assert!(is_relevant_change(
             Path::new("/other/worktree/file.txt"),
+            &git_dir()
+        ));
+    }
+
+    #[test]
+    fn only_relevant_git_directory_paths_count_as_git_changes() {
+        assert!(is_git_directory_change(
+            Path::new("/repo/.git/refs/heads/main"),
+            &git_dir()
+        ));
+        assert!(is_git_directory_change(
+            Path::new("/repo/.git/index"),
+            &git_dir()
+        ));
+        // Filtered Git churn is not a ref change.
+        assert!(!is_git_directory_change(
+            Path::new("/repo/.git/objects/ab/cdef"),
+            &git_dir()
+        ));
+        assert!(!is_git_directory_change(
+            Path::new("/repo/.git/index.lock"),
+            &git_dir()
+        ));
+        // Worktree edits never move refs, however relevant they are.
+        assert!(!is_git_directory_change(
+            Path::new("/repo/src/main.rs"),
             &git_dir()
         ));
     }

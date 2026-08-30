@@ -213,6 +213,54 @@ export function appendUniqueCommitsWithLimit(
   return { commits: next, limitReached: next.length >= limit };
 }
 
+export interface RefreshedHistoryResult {
+  commits: CommitSummary[];
+  /** True when the reloaded page shares no commit with the loaded list, so the
+   * already-loaded tail was discarded and pagination has to restart. */
+  replaced: boolean;
+}
+
+/**
+ * Merges a freshly reloaded first page into the already-loaded list.
+ *
+ * A background refresh only re-reads page 0, so it must splice that page onto
+ * whatever the user had paged in without resetting their scroll position. The
+ * reloaded page is authoritative for the part of history it covers: the tail is
+ * kept only from the point where the two lists meet again, which drops commits
+ * that a rewrite removed instead of leaving them stranded above their
+ * replacements.
+ *
+ * When the two lists share nothing (a switch to unrelated history), the fresh
+ * page replaces the list entirely.
+ */
+export function mergeRefreshedHistoryPage(
+  current: CommitSummary[],
+  refreshed: CommitSummary[],
+  limit: number,
+): RefreshedHistoryResult {
+  if (current.length === 0) {
+    return { commits: refreshed, replaced: true };
+  }
+
+  const refreshedOids = new Set(refreshed.map((commit) => commit.oid));
+  const rejoinIndex = current.findIndex((commit) => refreshedOids.has(commit.oid));
+  if (rejoinIndex === -1) {
+    return { commits: refreshed, replaced: true };
+  }
+
+  const tail = current
+    .slice(rejoinIndex)
+    .filter((commit) => !refreshedOids.has(commit.oid))
+    .slice(0, Math.max(0, limit - refreshed.length));
+  const commits = [...refreshed, ...tail];
+  // Keep the previous array identity when nothing moved, so downstream graph
+  // and list memos are not invalidated by an unchanged background refresh.
+  const unchanged =
+    commits.length === current.length &&
+    commits.every((commit, index) => commit.oid === current[index].oid);
+  return { commits: unchanged ? current : commits, replaced: false };
+}
+
 export function parseUnifiedDiff(patch: string): UnifiedDiff {
   const lines: UnifiedDiffLine[] = [];
   let additions = 0;

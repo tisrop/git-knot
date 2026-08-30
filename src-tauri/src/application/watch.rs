@@ -53,7 +53,7 @@ impl RepositoryWatchManager {
         let emit_app = app;
         let emit_path = requested_path.clone();
         let emit_generation = Arc::clone(&self.generation);
-        let watch = RepositoryWatch::start(&root, &git_dir, move || {
+        let watch = RepositoryWatch::start(&root, &git_dir, move |git_dir_changed| {
             if emit_generation.load(Ordering::SeqCst) != generation {
                 return;
             }
@@ -64,6 +64,7 @@ impl RepositoryWatchManager {
                     // canonical root, so it can match the event against its
                     // own project record without normalising paths.
                     repository_path: emit_path.clone(),
+                    git_dir_changed,
                 },
             );
         })?;

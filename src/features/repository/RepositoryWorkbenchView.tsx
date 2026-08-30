@@ -19,6 +19,9 @@ interface RepositoryWorkbenchViewProps {
   onError: (message: string) => void;
   gitOperations: GitOperationEvent[];
   onOperationStarted: (operation: GitOperationEvent) => void;
+  /** Bumped when the repository's Git directory changed on disk, so history
+   * reloads in place without resetting the user's filters or scroll. */
+  historyRefreshSignal?: number;
 }
 
 type DiffSource = "worktree" | "history";
@@ -43,6 +46,7 @@ export function RepositoryWorkbenchView({
   onError,
   gitOperations,
   onOperationStarted,
+  historyRefreshSignal = 0,
 }: RepositoryWorkbenchViewProps) {
   const [diffSource, setDiffSource] = useState<DiffSource>("worktree");
   const [sourcePaneHeight, setSourcePaneHeight] = useState<number | null>(null);
@@ -172,6 +176,7 @@ export function RepositoryWorkbenchView({
         diffPanelVisible={diffSource === "history"}
         project={project}
         refreshToken={historyRefreshToken}
+        silentRefreshToken={historyRefreshSignal}
         onDiffFocus={() => setDiffSource("history")}
         onStatusChange={onStatusChange}
         gitOperations={gitOperations}

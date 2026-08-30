@@ -10,6 +10,7 @@ import {
   isAddedFileDiff,
   isCurrentRepositoryPath,
   LruCache,
+  mergeRefreshedHistoryPage,
   parseUnifiedDiff,
   patchForFile,
   shortCommitOid,
@@ -75,6 +76,52 @@ describe("history presentation helpers", () => {
 
     expect(result.commits.map((item) => item.oid)).toEqual(["one", "two"]);
     expect(result.limitReached).toBe(true);
+  });
+
+  it("keeps the loaded tail when a background refresh finds new commits", () => {
+    const current = [commit("c", []), commit("b", []), commit("a", [])];
+    const result = mergeRefreshedHistoryPage(current, [commit("d", []), commit("c", [])], 100);
+
+    expect(result.commits.map((item) => item.oid)).toEqual(["d", "c", "b", "a"]);
+    expect(result.replaced).toBe(false);
+  });
+
+  it("returns the same array when a background refresh changes nothing", () => {
+    const current = [commit("c", []), commit("b", []), commit("a", [])];
+    const result = mergeRefreshedHistoryPage(current, [commit("c", []), commit("b", [])], 100);
+
+    expect(result.commits).toBe(current);
+    expect(result.replaced).toBe(false);
+  });
+
+  it("drops commits a rewrite removed from the top of history", () => {
+    const current = [commit("c", []), commit("b", []), commit("a", [])];
+    const result = mergeRefreshedHistoryPage(current, [commit("b", []), commit("a", [])], 100);
+
+    expect(result.commits.map((item) => item.oid)).toEqual(["b", "a"]);
+    expect(result.replaced).toBe(false);
+  });
+
+  it("replaces the list when the refreshed page shares no commit", () => {
+    const current = [commit("c", []), commit("b", [])];
+    const result = mergeRefreshedHistoryPage(current, [commit("z", []), commit("y", [])], 100);
+
+    expect(result.commits.map((item) => item.oid)).toEqual(["z", "y"]);
+    expect(result.replaced).toBe(true);
+  });
+
+  it("replaces an empty list without claiming a merge", () => {
+    const result = mergeRefreshedHistoryPage([], [commit("a", [])], 100);
+
+    expect(result.commits.map((item) => item.oid)).toEqual(["a"]);
+    expect(result.replaced).toBe(true);
+  });
+
+  it("honours the soft limit while merging", () => {
+    const current = [commit("c", []), commit("b", []), commit("a", [])];
+    const result = mergeRefreshedHistoryPage(current, [commit("d", []), commit("c", [])], 3);
+
+    expect(result.commits.map((item) => item.oid)).toEqual(["d", "c", "b"]);
   });
 
   it("maps name-status codes to readable labels", () => {

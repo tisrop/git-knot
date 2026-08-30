@@ -161,9 +161,14 @@ pub struct AmendCommitCreated {
 /// Emitted when the watched repository's worktree or Git state changed on
 /// disk. It carries no state on purpose: the frontend re-reads authoritative
 /// status instead of trusting a notification payload.
+///
+/// `git_dir_changed` reports whether the burst reached the Git directory.
+/// Worktree-only edits cannot move refs, so the frontend skips reloading
+/// history and ref decorations for them.
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceChangedEvent {
     pub repository_path: String,
+    pub git_dir_changed: bool,
 }

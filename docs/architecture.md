@@ -116,7 +116,7 @@ Feature/UI -> DesktopApi -> TauriBridge -> invoke(command) -> Rust
 - Remote 管理只接受经 Rust 校验的名称和 URL：允许 HTTPS、SSH、SCP-like SSH、`file://` 绝对路径和本地绝对路径，拒绝相对路径、URL 密码/query/fragment、HTTPS userinfo 和 Gitee；前端不接收原始敏感 URL；
 - Remote 编辑使用 patch 语义，留空保持原地址，显式操作才能重置独立 Push URL；多 Fetch/Push URL Remote 暂不允许编辑；
 - Remote 更新和删除使用 Rust 预览生成的私有 namespace 快照 token 防止过期界面覆盖外部 Git 修改；删除预览列出受影响本地 upstream，所有 mutation 进入仓库写队列。两阶段 URL 更新失败时只提供 best-effort rollback，不宣称 Git 配置事务；
-- 当前打开的仓库由一份只读文件系统监听观察工作区与 Git 公共目录。监听器不执行 Git、不读取文件内容，只在 300 ms 去抖后推送不带状态的 `repository://workspace-changed` 通知，前端仍通过 `repository_status` 重新读取权威状态。同时只监听一个仓库，`.git` 内的 `objects/`、`logs/`、`lfs/`、`modules/`、`FETCH_HEAD`、`COMMIT_EDITMSG` 和 `*.lock` 被过滤；工作区不套用 `.gitignore`，噪声由去抖与前端按值比较状态吸收。文件系统通知是 best-effort，因此刷新按钮保留，窗口重新聚焦时额外静默刷新一次，监听启动失败静默降级，详见 ADR 0031；
+- 当前打开的仓库由一份只读文件系统监听观察工作区与 Git 公共目录。监听器不执行 Git、不读取文件内容，只在 300 ms 去抖后推送 `repository://workspace-changed` 通知（仅含仓库路径和 `gitDirChanged` 刷新范围提示），前端仍通过 `repository_status` 重新读取权威状态；只有 `gitDirChanged` 为真时才额外重读提交历史、refs 与 tags。同时只监听一个仓库，`.git` 内的 `objects/`、`logs/`、`lfs/`、`modules/`、`FETCH_HEAD`、`COMMIT_EDITMSG` 和 `*.lock` 被过滤；工作区不套用 `.gitignore`，噪声由去抖与前端按值比较状态吸收。文件系统通知是 best-effort，因此刷新按钮保留，窗口重新聚焦时额外静默刷新一次，监听启动失败静默降级，详见 ADR 0031；
 - 凭据交给系统 Git 与 credential helper，应用配置中不保存明文密码或令牌。
 
 ## 5. 状态与持久化
@@ -126,7 +126,7 @@ Feature/UI -> DesktopApi -> TauriBridge -> invoke(command) -> Rust
 - 服务端/桌面状态使用查询缓存模型管理；
 - 临时交互状态保留在组件或功能级 store；
 - 仓库状态刷新需要去重，旧请求结果不得覆盖新选择的仓库；
-- 文件监听或窗口聚焦触发的刷新是静默的：不置 `refreshing`、不写错误横幅，且状态内容不变时不替换 `RepositoryStatus` 对象，避免下游 diff 与 merge recovery 预览无谓重载；
+- 文件监听或窗口聚焦触发的刷新是静默的：不置 `refreshing`、不写错误横幅，且状态内容不变时不替换 `RepositoryStatus` 对象，避免下游 diff 与 merge recovery 预览无谓重载；提交历史走独立的原地刷新路径，只重读第 0 页并合并回已加载分页，保留筛选、ref 选择、选中提交与滚动位置，不复用会清空这些状态的全量 `refreshToken`；
 - Git 写操作完成后按影响范围失效缓存，而不是全应用刷新。
 
 ### 本地配置

@@ -125,6 +125,7 @@ export function App() {
     null,
   );
   const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredThemeMode);
+  const [historyRefreshSignal, setHistoryRefreshSignal] = useState(0);
   const statusRequest = useRef(0);
   const projectContextMenuRef = useRef<HTMLDivElement | null>(null);
   const projectStatusesRef = useRef<Record<string, RepositoryStatus>>({});
@@ -318,7 +319,11 @@ export function App() {
 
   const refreshSelectedProjectSilently = useCallback(() => {
     const project = projectsRef.current.find((item) => item.id === selectedIdRef.current);
-    if (project) void silentRefresh(project);
+    if (!project) return;
+    void silentRefresh(project);
+    // Returning to the window is rare enough to always re-read history: we have
+    // no idea what happened while the app was in the background.
+    setHistoryRefreshSignal((current) => current + 1);
   }, [silentRefresh]);
 
   useEffect(() => {
@@ -513,16 +518,27 @@ export function App() {
     let disposed = false;
     let unsubscribe = () => {};
     let refreshTimeout: number | null = null;
+    let gitDirChanged = false;
 
     void desktopApi.repository
       .subscribeWorkspaceChanges((event) => {
         if (refreshTimeout !== null) window.clearTimeout(refreshTimeout);
+        // Any Git-directory change inside the coalesced window has to survive
+        // to the end of it, otherwise a trailing worktree-only event would hide
+        // the commit that arrived just before it.
+        gitDirChanged ||= event.gitDirChanged;
         refreshTimeout = window.setTimeout(() => {
           refreshTimeout = null;
+          const refreshHistory = gitDirChanged;
+          gitDirChanged = false;
           const project = projectsRef.current.find((item) => item.id === selectedIdRef.current);
           // The watcher echoes back the path we asked it to observe, so a
           // stale event from a repository we just left compares unequal.
-          if (project?.path === event.repositoryPath) void silentRefresh(project);
+          if (project?.path !== event.repositoryPath) return;
+          void silentRefresh(project);
+          // Worktree edits cannot move refs, so history and its decorations are
+          // only re-read when the Git directory itself changed.
+          if (refreshHistory) setHistoryRefreshSignal((current) => current + 1);
         }, WORKSPACE_REFRESH_DEBOUNCE_MS);
       })
       .then((stop) => {
@@ -1132,6 +1148,7 @@ export function App() {
                 project={selectedProject}
                 status={visibleStatus}
                 refreshing={refreshing}
+                historyRefreshSignal={historyRefreshSignal}
                 onRefresh={() => loadStatus(selectedProject)}
                 onStatusChange={handleSelectedStatusChange}
                 onError={setError}

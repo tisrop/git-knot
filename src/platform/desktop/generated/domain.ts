@@ -155,7 +155,7 @@ export type UpdateCheckResult = { currentVersion: string, available: boolean, ve
 
 export type UpdateProgressEvent = { requestId: string, downloaded: number, total: number | null, phase: string, };
 
-export type WorkspaceChangedEvent = { repositoryPath: string, };
+export type WorkspaceChangedEvent = { repositoryPath: string, gitDirChanged: boolean, };
 
 export type WorktreeCreateCandidate = { branch: string, branchFullName: string, headOid: string, targetPath: string, token: string, };
 
