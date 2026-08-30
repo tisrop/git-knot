@@ -1159,10 +1159,20 @@ input[type="radio"] {
 .panel-message.error-message,
 .amend-preview-error,
 .merge-recovery-error,
-.confirmation-dialog > p.clone-inline-error {
+.confirmation-dialog > p.clone-inline-error,
+.confirmation-dialog > p.error-message {
   border-color: color-mix(in srgb, var(--danger) 25%, transparent);
   color: var(--danger);
   background: var(--danger-soft);
+}
+
+.confirmation-dialog > p.error-message {
+  margin: 12px 0 0;
+  border: 1px solid;
+  border-radius: var(--radius-control);
+  padding: 10px;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .operation-warning,
@@ -4372,12 +4382,17 @@ select:focus-visible,
 
 input:not([type="checkbox"]):not([type="radio"]),
 textarea,
+select {
+  font-size: 11px;
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
 select,
-.themed-select-trigger {
+.themed-select {
   min-height: 32px;
   border-radius: var(--radius-control);
   box-shadow: none;
-  font-size: 11px;
 }
 
 textarea {
