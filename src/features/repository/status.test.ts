@@ -3,6 +3,7 @@ import type { RepositoryStatus } from "../../platform/desktop";
 import {
   isCurrentRepositoryStatusRequest,
   isCurrentStatusRequest,
+  repositoryStatusEquals,
   summarizeRepositoryStatus,
 } from "./status";
 
@@ -69,5 +70,105 @@ describe("status request sequencing", () => {
 
   it("rejects a repository response after the selected status request changes", () => {
     expect(isCurrentRepositoryStatusRequest(9, 8, 3, 3)).toBe(false);
+  });
+});
+
+describe("repositoryStatusEquals", () => {
+  function buildStatus(overrides: Partial<RepositoryStatus> = {}): RepositoryStatus {
+    return {
+      root: "/repo",
+      branch: { head: "main", oid: "abc", upstream: "origin/main", ahead: 0, behind: 0 },
+      changes: [
+        {
+          path: "src/a.ts",
+          originalPath: null,
+          indexStatus: ".",
+          worktreeStatus: "M",
+          kind: "ordinary",
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  it("treats two independent reads of the same state as equal", () => {
+    expect(repositoryStatusEquals(buildStatus(), buildStatus())).toBe(true);
+  });
+
+  it("treats two null reads as equal but a null and a value as different", () => {
+    expect(repositoryStatusEquals(null, null)).toBe(true);
+    expect(repositoryStatusEquals(null, buildStatus())).toBe(false);
+    expect(repositoryStatusEquals(buildStatus(), null)).toBe(false);
+  });
+
+  it("detects an added change entry", () => {
+    const next = buildStatus({
+      changes: [
+        ...buildStatus().changes,
+        {
+          path: "notes.txt",
+          originalPath: null,
+          indexStatus: null,
+          worktreeStatus: null,
+          kind: "untracked",
+        },
+      ],
+    });
+    expect(repositoryStatusEquals(buildStatus(), next)).toBe(false);
+  });
+
+  it("detects a file moving from the worktree to the index", () => {
+    const staged = buildStatus({
+      changes: [
+        {
+          path: "src/a.ts",
+          originalPath: null,
+          indexStatus: "M",
+          worktreeStatus: ".",
+          kind: "ordinary",
+        },
+      ],
+    });
+    expect(repositoryStatusEquals(buildStatus(), staged)).toBe(false);
+  });
+
+  it("detects branch, ahead/behind and root changes", () => {
+    expect(
+      repositoryStatusEquals(
+        buildStatus(),
+        buildStatus({
+          branch: { head: "feature", oid: "abc", upstream: "origin/main", ahead: 0, behind: 0 },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      repositoryStatusEquals(
+        buildStatus(),
+        buildStatus({
+          branch: { head: "main", oid: "abc", upstream: "origin/main", ahead: 1, behind: 0 },
+        }),
+      ),
+    ).toBe(false);
+    expect(repositoryStatusEquals(buildStatus(), buildStatus({ root: "/other" }))).toBe(false);
+  });
+
+  it("detects a reordered change list", () => {
+    const changes = [
+      ...buildStatus().changes,
+      {
+        path: "src/b.ts",
+        originalPath: null,
+        indexStatus: ".",
+        worktreeStatus: "M",
+        kind: "ordinary",
+      },
+    ] satisfies RepositoryStatus["changes"];
+
+    expect(
+      repositoryStatusEquals(
+        buildStatus({ changes }),
+        buildStatus({ changes: [...changes].reverse() }),
+      ),
+    ).toBe(false);
   });
 });

@@ -23,9 +23,10 @@ pub use project::{AppConfig, Project, ProjectMetadataUpdateInput, CURRENT_SCHEMA
 pub use refs::{
     BranchCreateAtCommitInput, BranchInfo, BranchKind, CherryPickCommitInput,
     CherryPickCommitPreview, LocalMergeMode, LocalMergePreview, LocalMergeStrategy,
-    RemoteCreateInput, RemoteDeleteInput, RemoteDeletePreview, RemoteEditPreview, RemoteInfo,
-    RemoteUpdateInput, RepositoryRefs, RepositoryRefsMutationResult, ResetCommitInput,
-    ResetCommitMode, ResetCommitPreview, RevertCommitInput, RevertCommitPreview,
+    PublishBranchInput, PushBranchTargetInput, RemoteCreateInput, RemoteDeleteInput,
+    RemoteDeletePreview, RemoteEditPreview, RemoteInfo, RemoteUpdateInput, RepositoryRefs,
+    RepositoryRefsMutationResult, ResetCommitInput, ResetCommitMode, ResetCommitPreview,
+    RevertCommitInput, RevertCommitPreview,
 };
 pub use stash::{RepositoryStashes, RepositoryStashesMutationResult, StashCreateInput, StashInfo};
 pub use submodule::{RepositorySubmodules, SubmoduleInfo, SubmoduleState};
@@ -35,9 +36,10 @@ pub use tag::{
 };
 pub use update::{UpdateCheckResult, UpdateProgressEvent, UPDATE_PROGRESS_EVENT};
 pub use workspace::{
-    AmendCommitCreated, AmendCommitInput, AmendCommitPreview, CommitCreated, CommitInput,
-    ConflictDetails, ConflictResolutionChoice, ConflictResolutionInput, ConflictSide,
-    MergeRecoveryInput, MergeRecoveryPreview, RepositoryMutationResult, WorktreeDiff,
+    AmendAndPushInput, AmendAndPushPreview, AmendCommitCreated, AmendCommitInput,
+    AmendCommitPreview, CommitCreated, CommitInput, ConflictDetails, ConflictResolutionChoice,
+    ConflictResolutionInput, ConflictSide, MergeRecoveryInput, MergeRecoveryPreview,
+    RepositoryMutationResult, WorkspaceChangedEvent, WorktreeDiff, WORKSPACE_CHANGED_EVENT,
 };
 pub use worktree::{
     RepositoryWorktrees, WorktreeCreateCandidate, WorktreeCreateInput, WorktreeInfo,

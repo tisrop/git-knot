@@ -1,17 +1,17 @@
 use crate::domain::{
-    AmendCommitCreated, AmendCommitInput, AmendCommitPreview, BranchCreateAtCommitInput,
-    CherryPickCommitInput, CherryPickCommitPreview, CommitCreated, CommitDetails, CommitInput,
-    ConflictDetails, ConflictResolutionInput, GitOperationEvent, GitOperationKind,
-    GitOperationStarted, GitOperationState, HistoryPage, HistoryQuery, LocalMergePreview,
-    LocalMergeStrategy, MergeRecoveryInput, MergeRecoveryPreview, RemoteCreateInput,
-    RemoteDeleteInput, RemoteDeletePreview, RemoteEditPreview, RemoteTagDeleteInput,
-    RemoteTagDeletePreviewInput, RemoteTagPushInput, RemoteUpdateInput, RepositoryMutationResult,
-    RepositoryRefs, RepositoryRefsMutationResult, RepositoryStashes,
-    RepositoryStashesMutationResult, RepositoryStatus, RepositorySubmodules, RepositoryTags,
-    RepositoryTagsMutationResult, RepositoryWorktrees, ResetCommitInput, ResetCommitMode,
-    ResetCommitPreview, RevertCommitInput, RevertCommitPreview, StashCreateInput,
-    WorktreeCreateInput, WorktreeDiff, WorktreeLockInput, WorktreePruneInput, WorktreeUnlockInput,
-    GIT_OPERATION_EVENT,
+    AmendAndPushInput, AmendAndPushPreview, AmendCommitCreated, AmendCommitInput,
+    AmendCommitPreview, BranchCreateAtCommitInput, CherryPickCommitInput, CherryPickCommitPreview,
+    CommitCreated, CommitDetails, CommitInput, ConflictDetails, ConflictResolutionInput,
+    GitOperationEvent, GitOperationKind, GitOperationStarted, GitOperationState, HistoryPage,
+    HistoryQuery, LocalMergePreview, LocalMergeStrategy, MergeRecoveryInput, MergeRecoveryPreview,
+    PublishBranchInput, PushBranchTargetInput, RemoteCreateInput, RemoteDeleteInput,
+    RemoteDeletePreview, RemoteEditPreview, RemoteTagDeleteInput, RemoteTagDeletePreviewInput,
+    RemoteTagPushInput, RemoteUpdateInput, RepositoryMutationResult, RepositoryRefs,
+    RepositoryRefsMutationResult, RepositoryStashes, RepositoryStashesMutationResult,
+    RepositoryStatus, RepositorySubmodules, RepositoryTags, RepositoryTagsMutationResult,
+    RepositoryWorktrees, ResetCommitInput, ResetCommitMode, ResetCommitPreview, RevertCommitInput,
+    RevertCommitPreview, StashCreateInput, WorktreeCreateInput, WorktreeDiff, WorktreeLockInput,
+    WorktreePruneInput, WorktreeUnlockInput, GIT_OPERATION_EVENT,
 };
 use crate::error::CommandError;
 use crate::infrastructure::git::FetchProgress;
@@ -38,6 +38,28 @@ pub async fn repository_status(
     tauri::async_runtime::spawn_blocking(move || repository.status(&path))
         .await
         .map_err(|error| task_error("仓库状态", error))?
+}
+
+#[tauri::command]
+pub async fn repository_watch_start(
+    app: AppHandle,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let watch = state.repository_watch.clone();
+    tauri::async_runtime::spawn_blocking(move || watch.start(app, path))
+        .await
+        .map_err(|error| task_error("仓库文件监听", error))?
+}
+
+#[tauri::command]
+pub async fn repository_watch_stop(state: State<'_, AppState>) -> Result<(), CommandError> {
+    let watch = state.repository_watch.clone();
+    // Stopping joins the watcher thread, so it does not belong on the async
+    // runtime's cooperative executor.
+    tauri::async_runtime::spawn_blocking(move || watch.stop())
+        .await
+        .map_err(|error| task_error("仓库文件监听", error))
 }
 
 #[tauri::command]
@@ -1000,6 +1022,230 @@ pub async fn repository_push_start(
 }
 
 #[tauri::command]
+pub async fn repository_publish_branch_start(
+    path: String,
+    input: PublishBranchInput,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<GitOperationStarted, CommandError> {
+    let operation = state.git_operations.register()?;
+    let operation_id = operation.operation_id().to_owned();
+    let cancellation = operation.cancellation();
+    let repository = state.repository.clone();
+    let repository_path = path.clone();
+    let task_operation_id = operation_id.clone();
+    let target_label = format!("{}/{}", input.remote_name, input.remote_branch_name);
+
+    emit_operation(
+        &app,
+        GitOperationEvent {
+            operation_id: operation_id.clone(),
+            repository_path: repository_path.clone(),
+            kind: GitOperationKind::Push,
+            state: GitOperationState::Queued,
+            phase: Some("queued".to_owned()),
+            percent: None,
+            message: format!("正在等待发布到 {target_label}"),
+            remote_tag_delete_preview: None,
+        },
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
+        let started_app = app.clone();
+        let started_operation_id = task_operation_id.clone();
+        let started_repository_path = repository_path.clone();
+        let started_target_label = target_label.clone();
+        let started: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            emit_operation(
+                &started_app,
+                GitOperationEvent {
+                    operation_id: started_operation_id.clone(),
+                    repository_path: started_repository_path.clone(),
+                    kind: GitOperationKind::Push,
+                    state: GitOperationState::Running,
+                    phase: Some("connecting".to_owned()),
+                    percent: None,
+                    message: format!("正在发布当前分支到 {started_target_label}"),
+                    remote_tag_delete_preview: None,
+                },
+            );
+        });
+
+        let progress_app = app.clone();
+        let progress_operation_id = task_operation_id.clone();
+        let progress_repository_path = repository_path.clone();
+        let progress: Arc<dyn Fn(FetchProgress) + Send + Sync> = Arc::new(move |update| {
+            emit_operation(
+                &progress_app,
+                GitOperationEvent {
+                    operation_id: progress_operation_id.clone(),
+                    repository_path: progress_repository_path.clone(),
+                    kind: GitOperationKind::Push,
+                    state: GitOperationState::Progress,
+                    phase: Some(update.phase),
+                    percent: update.percent,
+                    message: update.message,
+                    remote_tag_delete_preview: None,
+                },
+            );
+        });
+
+        let result = repository.publish_branch(
+            &PathBuf::from(&repository_path),
+            &input,
+            cancellation,
+            started,
+            progress,
+        );
+        let event = match result {
+            Ok(()) => GitOperationEvent {
+                operation_id: task_operation_id.clone(),
+                repository_path,
+                kind: GitOperationKind::Push,
+                state: GitOperationState::Succeeded,
+                phase: Some("completed".to_owned()),
+                percent: Some(100),
+                message: format!("已发布当前分支到 {target_label} 并设置上游"),
+                remote_tag_delete_preview: None,
+            },
+            Err(error) => {
+                let state = match error.code {
+                    "git_operation_cancelled" => GitOperationState::Cancelled,
+                    "git_operation_timed_out" => GitOperationState::TimedOut,
+                    _ => GitOperationState::Failed,
+                };
+                GitOperationEvent {
+                    operation_id: task_operation_id.clone(),
+                    repository_path,
+                    kind: GitOperationKind::Push,
+                    state,
+                    phase: Some("completed".to_owned()),
+                    percent: None,
+                    message: error.message,
+                    remote_tag_delete_preview: None,
+                }
+            }
+        };
+        emit_operation(&app, event);
+    });
+
+    Ok(GitOperationStarted { operation_id })
+}
+
+#[tauri::command]
+pub async fn repository_push_branch_target_start(
+    path: String,
+    input: PushBranchTargetInput,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<GitOperationStarted, CommandError> {
+    let operation = state.git_operations.register()?;
+    let operation_id = operation.operation_id().to_owned();
+    let cancellation = operation.cancellation();
+    let repository = state.repository.clone();
+    let repository_path = path.clone();
+    let task_operation_id = operation_id.clone();
+    let target_label = format!("{}/{}", input.remote_name, input.remote_branch_name);
+
+    emit_operation(
+        &app,
+        GitOperationEvent {
+            operation_id: operation_id.clone(),
+            repository_path: repository_path.clone(),
+            kind: GitOperationKind::Push,
+            state: GitOperationState::Queued,
+            phase: Some("queued".to_owned()),
+            percent: None,
+            message: format!("正在等待推送到 {target_label}"),
+            remote_tag_delete_preview: None,
+        },
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
+        let started_app = app.clone();
+        let started_operation_id = task_operation_id.clone();
+        let started_repository_path = repository_path.clone();
+        let started_target_label = target_label.clone();
+        let started: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            emit_operation(
+                &started_app,
+                GitOperationEvent {
+                    operation_id: started_operation_id.clone(),
+                    repository_path: started_repository_path.clone(),
+                    kind: GitOperationKind::Push,
+                    state: GitOperationState::Running,
+                    phase: Some("connecting".to_owned()),
+                    percent: None,
+                    message: format!("正在推送当前分支到 {started_target_label}"),
+                    remote_tag_delete_preview: None,
+                },
+            );
+        });
+
+        let progress_app = app.clone();
+        let progress_operation_id = task_operation_id.clone();
+        let progress_repository_path = repository_path.clone();
+        let progress: Arc<dyn Fn(FetchProgress) + Send + Sync> = Arc::new(move |update| {
+            emit_operation(
+                &progress_app,
+                GitOperationEvent {
+                    operation_id: progress_operation_id.clone(),
+                    repository_path: progress_repository_path.clone(),
+                    kind: GitOperationKind::Push,
+                    state: GitOperationState::Progress,
+                    phase: Some(update.phase),
+                    percent: update.percent,
+                    message: update.message,
+                    remote_tag_delete_preview: None,
+                },
+            );
+        });
+
+        let result = repository.push_branch_target(
+            &PathBuf::from(&repository_path),
+            &input,
+            cancellation,
+            started,
+            progress,
+        );
+        let event = match result {
+            Ok(()) => GitOperationEvent {
+                operation_id: task_operation_id.clone(),
+                repository_path,
+                kind: GitOperationKind::Push,
+                state: GitOperationState::Succeeded,
+                phase: Some("completed".to_owned()),
+                percent: Some(100),
+                message: format!("已推送到 {target_label} 并设置上游"),
+                remote_tag_delete_preview: None,
+            },
+            Err(error) => {
+                let state = match error.code {
+                    "git_operation_cancelled" => GitOperationState::Cancelled,
+                    "git_operation_timed_out" => GitOperationState::TimedOut,
+                    _ => GitOperationState::Failed,
+                };
+                GitOperationEvent {
+                    operation_id: task_operation_id.clone(),
+                    repository_path,
+                    kind: GitOperationKind::Push,
+                    state,
+                    phase: Some("completed".to_owned()),
+                    percent: None,
+                    message: error.message,
+                    remote_tag_delete_preview: None,
+                }
+            }
+        };
+        emit_operation(&app, event);
+    });
+
+    Ok(GitOperationStarted { operation_id })
+}
+
+#[tauri::command]
 pub async fn repository_sync_start(
     path: String,
     app: AppHandle,
@@ -1459,6 +1705,128 @@ pub async fn repository_create_commit(
     tauri::async_runtime::spawn_blocking(move || repository.create_commit(&path, &input))
         .await
         .map_err(|error| task_error("创建提交", error))?
+}
+
+#[tauri::command]
+pub async fn repository_preview_amend_and_push(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<AmendAndPushPreview, CommandError> {
+    let path = PathBuf::from(path);
+    let repository = state.repository.clone();
+    tauri::async_runtime::spawn_blocking(move || repository.preview_amend_and_push(&path))
+        .await
+        .map_err(|error| task_error("修改提交并安全强推预览", error))?
+}
+
+#[tauri::command]
+pub async fn repository_amend_and_push_start(
+    path: String,
+    input: AmendAndPushInput,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<GitOperationStarted, CommandError> {
+    let operation = state.git_operations.register()?;
+    let operation_id = operation.operation_id().to_owned();
+    let cancellation = operation.cancellation();
+    let repository = state.repository.clone();
+    let repository_path = path.clone();
+    let task_operation_id = operation_id.clone();
+
+    emit_operation(
+        &app,
+        GitOperationEvent {
+            operation_id: operation_id.clone(),
+            repository_path: repository_path.clone(),
+            kind: GitOperationKind::AmendPush,
+            state: GitOperationState::Queued,
+            phase: Some("queued".to_owned()),
+            percent: None,
+            message: "正在等待修改提交并安全强推".to_owned(),
+            remote_tag_delete_preview: None,
+        },
+    );
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
+        let started_app = app.clone();
+        let started_operation_id = task_operation_id.clone();
+        let started_repository_path = repository_path.clone();
+        let started: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            emit_operation(
+                &started_app,
+                GitOperationEvent {
+                    operation_id: started_operation_id.clone(),
+                    repository_path: started_repository_path.clone(),
+                    kind: GitOperationKind::AmendPush,
+                    state: GitOperationState::Running,
+                    phase: Some("verifying".to_owned()),
+                    percent: None,
+                    message: "正在校验 HEAD、暂存区与远端上游".to_owned(),
+                    remote_tag_delete_preview: None,
+                },
+            );
+        });
+
+        let progress_app = app.clone();
+        let progress_operation_id = task_operation_id.clone();
+        let progress_repository_path = repository_path.clone();
+        let progress: Arc<dyn Fn(FetchProgress) + Send + Sync> = Arc::new(move |update| {
+            emit_operation(
+                &progress_app,
+                GitOperationEvent {
+                    operation_id: progress_operation_id.clone(),
+                    repository_path: progress_repository_path.clone(),
+                    kind: GitOperationKind::AmendPush,
+                    state: GitOperationState::Progress,
+                    phase: Some(update.phase),
+                    percent: update.percent,
+                    message: update.message,
+                    remote_tag_delete_preview: None,
+                },
+            );
+        });
+
+        let result = repository.amend_and_push(
+            &PathBuf::from(&repository_path),
+            &input,
+            cancellation,
+            started,
+            progress,
+        );
+        let event = match result {
+            Ok(()) => GitOperationEvent {
+                operation_id: task_operation_id.clone(),
+                repository_path,
+                kind: GitOperationKind::AmendPush,
+                state: GitOperationState::Succeeded,
+                phase: Some("completed".to_owned()),
+                percent: Some(100),
+                message: "已修改当前提交并通过精确 force-with-lease 更新远端上游".to_owned(),
+                remote_tag_delete_preview: None,
+            },
+            Err(error) => {
+                let state = match error.code {
+                    "git_operation_cancelled" => GitOperationState::Cancelled,
+                    "git_operation_timed_out" => GitOperationState::TimedOut,
+                    _ => GitOperationState::Failed,
+                };
+                GitOperationEvent {
+                    operation_id: task_operation_id.clone(),
+                    repository_path,
+                    kind: GitOperationKind::AmendPush,
+                    state,
+                    phase: Some("completed".to_owned()),
+                    percent: None,
+                    message: error.message,
+                    remote_tag_delete_preview: None,
+                }
+            }
+        };
+        emit_operation(&app, event);
+    });
+
+    Ok(GitOperationStarted { operation_id })
 }
 
 #[tauri::command]

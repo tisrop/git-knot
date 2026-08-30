@@ -1,6 +1,8 @@
 use super::{CommitSummary, ImageDiff, RepositoryStatus};
 use serde::{Deserialize, Serialize};
 
+pub const WORKSPACE_CHANGED_EVENT: &str = "repository://workspace-changed";
+
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +93,33 @@ pub struct AmendCommitInput {
 }
 
 #[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmendAndPushInput {
+    pub subject: String,
+    #[serde(default)]
+    pub body: String,
+    pub expected_token: String,
+}
+
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmendAndPushPreview {
+    pub current_branch: String,
+    pub head_oid: String,
+    pub current_subject: String,
+    pub current_body: String,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub staged_change_count: u64,
+    pub remote_name: String,
+    pub remote_branch_name: String,
+    pub remote_full_name: String,
+    pub expected_remote_oid: String,
+    pub token: String,
+}
+
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AmendCommitPreview {
@@ -127,4 +156,14 @@ pub struct AmendCommitCreated {
     pub previous_oid: String,
     pub commit: CommitSummary,
     pub status: RepositoryStatus,
+}
+
+/// Emitted when the watched repository's worktree or Git state changed on
+/// disk. It carries no state on purpose: the frontend re-reads authoritative
+/// status instead of trusting a notification payload.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceChangedEvent {
+    pub repository_path: String,
 }

@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
+  AmendAndPushInput,
+  AmendAndPushPreview,
   AmendCommitCreated,
   AmendCommitInput,
   AmendCommitPreview,
@@ -54,6 +56,7 @@ import type {
   ResetCommitPreview,
   UpdateCheckResult,
   UpdateProgressEvent,
+  WorkspaceChangedEvent,
   WorktreeUnlockInput,
 } from "./contract";
 
@@ -229,13 +232,28 @@ export const tauriBridge: DesktopApi = {
       invoke<GitOperationStarted>("repository_fetch_start", { path, remoteName }),
     pull: (path) => invoke<GitOperationStarted>("repository_pull_start", { path }),
     push: (path) => invoke<GitOperationStarted>("repository_push_start", { path }),
+    publishBranch: (path, input) =>
+      invoke<GitOperationStarted>("repository_publish_branch_start", { path, input }),
+    pushBranchTarget: (path, input) =>
+      invoke<GitOperationStarted>("repository_push_branch_target_start", { path, input }),
     sync: (path) => invoke<GitOperationStarted>("repository_sync_start", { path }),
     createCommit: (path, input: CommitInput) =>
       invoke<CommitCreated>("repository_create_commit", { path, input }),
+    previewAmendAndPush: (path) =>
+      invoke<AmendAndPushPreview>("repository_preview_amend_and_push", { path }),
+    amendAndPush: (path, input: AmendAndPushInput) =>
+      invoke<GitOperationStarted>("repository_amend_and_push_start", { path, input }),
     previewAmendCommit: (path) =>
       invoke<AmendCommitPreview>("repository_preview_amend_commit", { path }),
     amendCommit: (path, input: AmendCommitInput) =>
       invoke<AmendCommitCreated>("repository_amend_commit", { path, input }),
+    watchWorkspace: (path) => invoke<void>("repository_watch_start", { path }),
+    unwatchWorkspace: () => invoke<void>("repository_watch_stop"),
+    async subscribeWorkspaceChanges(listener) {
+      return listen<WorkspaceChangedEvent>("repository://workspace-changed", (event) =>
+        listener(event.payload),
+      );
+    },
   },
   gitOperations: {
     async subscribe(listener) {

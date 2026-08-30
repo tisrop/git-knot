@@ -43,6 +43,7 @@ pub fn run() {
             commands::project::project_update_metadata,
             commands::repository::repository_abort_merge_recovery,
             commands::repository::repository_amend_commit,
+            commands::repository::repository_amend_and_push_start,
             commands::repository::repository_cherry_pick_commit,
             commands::repository::repository_commit,
             commands::repository::repository_commit_image_diff,
@@ -70,6 +71,7 @@ pub fn run() {
             commands::repository::repository_operation_cancel,
             commands::repository::repository_preview_local_merge,
             commands::repository::repository_preview_amend_commit,
+            commands::repository::repository_preview_amend_and_push,
             commands::repository::repository_preview_cherry_pick,
             commands::repository::repository_preview_merge_recovery,
             commands::repository::repository_preview_remote_delete,
@@ -79,6 +81,8 @@ pub fn run() {
             commands::repository::repository_preview_reset_commit,
             commands::repository::repository_pull_start,
             commands::repository::repository_pop_stash,
+            commands::repository::repository_publish_branch_start,
+            commands::repository::repository_push_branch_target_start,
             commands::repository::repository_push_start,
             commands::repository::repository_push_tag_start,
             commands::repository::repository_sync_start,
@@ -98,6 +102,8 @@ pub fn run() {
             commands::repository::repository_unlock_worktree,
             commands::repository::repository_prune_worktrees,
             commands::repository::repository_update_remote,
+            commands::repository::repository_watch_start,
+            commands::repository::repository_watch_stop,
             commands::repository::repository_worktree_diff,
             commands::repository::repository_worktrees,
             commands::update::update_check,
@@ -110,6 +116,7 @@ pub fn run() {
             if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
                 if let Some(state) = app.try_state::<AppState>() {
                     state.git_operations.cancel_all();
+                    state.repository_watch.stop();
                 }
             }
         });

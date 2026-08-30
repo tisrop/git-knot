@@ -7,11 +7,12 @@ mod tags_parser;
 mod worktrees_parser;
 
 use crate::domain::{
-    AmendCommitInput, AmendCommitPreview, BranchKind, ChangeKind, CherryPickCommitInput,
-    CherryPickCommitPreview, CommitDetails, CommitInput, CommitSummary, ConflictDetails,
-    ConflictResolutionChoice, ConflictResolutionInput, ConflictSide, GitVersion, HistoryPage,
-    HistoryQuery, ImageDiff, ImagePreview, LocalMergeMode, LocalMergePreview, LocalMergeStrategy,
-    MergeRecoveryInput, MergeRecoveryPreview, RemoteCreateInput, RemoteDeleteInput,
+    AmendAndPushInput, AmendAndPushPreview, AmendCommitInput, AmendCommitPreview, BranchKind,
+    ChangeKind, CherryPickCommitInput, CherryPickCommitPreview, CommitDetails, CommitInput,
+    CommitSummary, ConflictDetails, ConflictResolutionChoice, ConflictResolutionInput,
+    ConflictSide, GitVersion, HistoryPage, HistoryQuery, ImageDiff, ImagePreview, LocalMergeMode,
+    LocalMergePreview, LocalMergeStrategy, MergeRecoveryInput, MergeRecoveryPreview,
+    PublishBranchInput, PushBranchTargetInput, RemoteCreateInput, RemoteDeleteInput,
     RemoteDeletePreview, RemoteEditPreview, RemoteInfo, RemoteTagDeleteInput,
     RemoteTagDeletePreview, RemoteTagDeletePreviewInput, RemoteTagPushInput, RemoteUpdateInput,
     RepositoryRefs, RepositoryStashes, RepositoryStatus, RepositorySubmodules, RepositoryTags,
@@ -172,6 +173,17 @@ struct AmendCommitSnapshot {
     staged_change_count: u64,
     blocking_refs: Vec<String>,
     index_tree_oid: String,
+    token: String,
+}
+
+#[derive(Clone, Debug)]
+struct AmendAndPushSnapshot {
+    amend: AmendCommitSnapshot,
+    remote_name: String,
+    remote_branch_name: String,
+    remote_full_name: String,
+    remote_tracking_full_name: String,
+    remote_url: String,
     token: String,
 }
 
@@ -3732,6 +3744,280 @@ pub fn push_current_branch(
     )
 }
 
+/// Publishes the current local branch as a new remote branch and configures it
+/// as upstream. The empty force-with-lease expectation makes the remote write
+/// create-only, including when another writer creates the target concurrently.
+pub fn publish_current_branch(
+    path: &Path,
+    input: &PublishBranchInput,
+    cancellation: Arc<AtomicBool>,
+    progress: Arc<dyn Fn(FetchProgress) + Send + Sync>,
+) -> Result<(), CommandError> {
+    let deadline = OperationDeadline::new(PUSH_TIMEOUT);
+    let root = repository_root(path)?;
+    validate_oid(&input.expected_local_oid)?;
+    let remote_name = validate_remote_name(&root, &input.remote_name)?;
+    validate_branch_name(&root, &input.remote_branch_name)?;
+    let refs = repository_refs(&root)?;
+    let current = refs
+        .branches
+        .iter()
+        .find(|branch| branch.current && matches!(branch.kind, BranchKind::Local))
+        .ok_or_else(|| {
+            CommandError::new(
+                "push_detached_head",
+                "当前处于 detached HEAD，无法发布远端分支",
+            )
+        })?;
+    if current.upstream.is_some() {
+        return Err(CommandError::new(
+            "publish_upstream_exists",
+            "当前分支已经配置远端上游，请使用普通 Push",
+        ));
+    }
+    if current.full_name != input.local_full_name
+        || current.oid != input.expected_local_oid.to_ascii_lowercase()
+    {
+        return Err(CommandError::new(
+            "publish_local_branch_changed",
+            "当前分支在确认后发生变化，请刷新后重试",
+        ));
+    }
+    if !refs.remotes.iter().any(|remote| remote.name == remote_name) {
+        return Err(CommandError::new(
+            "remote_not_found",
+            "目标远端已不存在，请刷新后重试",
+        ));
+    }
+    if cancellation.load(Ordering::SeqCst) {
+        return Err(CommandError::new(
+            "git_operation_cancelled",
+            PUSH_CANCELLED_MESSAGE,
+        ));
+    }
+
+    let (_, remote_url) = single_remote_push_url(&root, &remote_name)?;
+    let remote_full_name = format!("refs/heads/{}", input.remote_branch_name);
+    let mut inspect_command = git_command(Some(&root), GitLocking::Required);
+    inspect_command
+        .args(["ls-remote", "--refs", "--heads", "--"])
+        .arg(&remote_url)
+        .arg(&remote_full_name)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut inspect_command);
+    let existing = run_network_output_process(
+        inspect_command,
+        Arc::clone(&cancellation),
+        deadline,
+        PUSH_CANCELLED_MESSAGE,
+        PUSH_TIMEOUT_MESSAGE,
+        fetch_failure,
+    )?;
+    if !existing.is_empty() {
+        return Err(CommandError::new(
+            "publish_remote_branch_exists",
+            "远端分支已经存在，请更换名称或先创建本地跟踪分支",
+        ));
+    }
+
+    progress(FetchProgress {
+        phase: "publishing".to_owned(),
+        percent: None,
+        message: format!(
+            "正在发布 {} 到 {remote_name}/{}",
+            current.name, input.remote_branch_name
+        ),
+    });
+
+    let lease = format!("--force-with-lease={remote_full_name}:");
+    let refspec = format!("{}:{remote_full_name}", current.full_name);
+    let mut command = git_command(Some(&root), GitLocking::Required);
+    command
+        .args(["push", "--progress", "--set-upstream"])
+        .arg(lease)
+        .arg("--")
+        .arg(&remote_name)
+        .arg(refspec)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    run_network_process(
+        command,
+        cancellation,
+        progress,
+        deadline,
+        PUSH_CANCELLED_MESSAGE,
+        PUSH_TIMEOUT_MESSAGE,
+        publish_branch_failure,
+    )
+}
+
+/// Pushes the current local branch to one explicitly selected remote branch and
+/// configures that target as upstream. Existing targets require an exact remote
+/// OID snapshot and a verified fast-forward; new targets use an empty lease.
+pub fn push_current_branch_to_target(
+    path: &Path,
+    input: &PushBranchTargetInput,
+    cancellation: Arc<AtomicBool>,
+    progress: Arc<dyn Fn(FetchProgress) + Send + Sync>,
+) -> Result<(), CommandError> {
+    let deadline = OperationDeadline::new(PUSH_TIMEOUT);
+    let root = repository_root(path)?;
+    validate_oid(&input.expected_local_oid)?;
+    let expected_remote_oid = if let Some(oid) = input.expected_remote_oid.as_deref() {
+        validate_oid(oid)?;
+        Some(oid.to_ascii_lowercase())
+    } else {
+        None
+    };
+    let remote_name = validate_remote_name(&root, &input.remote_name)?;
+    validate_branch_name(&root, &input.remote_branch_name)?;
+
+    let refs = repository_refs(&root)?;
+    let current = refs
+        .branches
+        .iter()
+        .find(|branch| branch.current && matches!(branch.kind, BranchKind::Local))
+        .ok_or_else(|| {
+            CommandError::new(
+                "push_detached_head",
+                "当前处于 detached HEAD，无法推送当前分支",
+            )
+        })?;
+    if current.full_name != input.local_full_name
+        || current.oid != input.expected_local_oid.to_ascii_lowercase()
+    {
+        return Err(CommandError::new(
+            "push_target_local_branch_changed",
+            "当前分支在确认后发生变化，请重新选择推送目标",
+        ));
+    }
+    if !refs.remotes.iter().any(|remote| remote.name == remote_name) {
+        return Err(CommandError::new(
+            "remote_not_found",
+            "目标远端已不存在，请刷新后重试",
+        ));
+    }
+
+    let remote_tracking_full_name =
+        format!("refs/remotes/{remote_name}/{}", input.remote_branch_name);
+    if let Some(expected_oid) = expected_remote_oid.as_deref() {
+        let selected = refs
+            .branches
+            .iter()
+            .find(|branch| {
+                matches!(branch.kind, BranchKind::Remote)
+                    && branch.full_name == remote_tracking_full_name
+            })
+            .ok_or_else(|| {
+                CommandError::new(
+                    "push_target_changed",
+                    "所选远端分支已不在本地引用中，请 Fetch 后重新选择",
+                )
+            })?;
+        if selected.oid != expected_oid {
+            return Err(CommandError::new(
+                "push_target_changed",
+                "所选远端分支在确认后发生变化，请 Fetch 后重新选择",
+            ));
+        }
+    }
+    if cancellation.load(Ordering::SeqCst) {
+        return Err(CommandError::new(
+            "git_operation_cancelled",
+            PUSH_CANCELLED_MESSAGE,
+        ));
+    }
+
+    let (_, remote_url) = single_remote_push_url(&root, &remote_name)?;
+    let remote_full_name = format!("refs/heads/{}", input.remote_branch_name);
+    let mut inspect_command = git_command(Some(&root), GitLocking::Required);
+    inspect_command
+        .args(["ls-remote", "--refs", "--heads", "--"])
+        .arg(&remote_url)
+        .arg(&remote_full_name)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut inspect_command);
+    let inspected = run_network_output_process(
+        inspect_command,
+        Arc::clone(&cancellation),
+        deadline,
+        PUSH_CANCELLED_MESSAGE,
+        PUSH_TIMEOUT_MESSAGE,
+        fetch_failure,
+    )?;
+    let actual_remote_oid = parse_optional_exact_remote_ref(&inspected, &remote_full_name)?;
+
+    let lease = match (expected_remote_oid.as_deref(), actual_remote_oid.as_deref()) {
+        (None, None) => format!("--force-with-lease={remote_full_name}:"),
+        (None, Some(_)) => {
+            return Err(CommandError::new(
+                "push_target_exists",
+                "目标远端分支已经存在，请改为选择现有分支或更换名称",
+            ));
+        }
+        (Some(expected), Some(actual)) if expected == actual => {
+            if !is_ancestor(&root, expected, &current.oid)? {
+                return Err(CommandError::new(
+                    "push_non_fast_forward",
+                    "当前分支不包含所选远端分支的提交，安全 Push 不会覆盖远端历史",
+                ));
+            }
+            format!("--force-with-lease={remote_full_name}:{expected}")
+        }
+        (Some(_), _) => {
+            return Err(CommandError::new(
+                "push_target_changed",
+                "所选远端分支在确认后发生变化，请 Fetch 后重新选择",
+            ));
+        }
+    };
+
+    progress(FetchProgress {
+        phase: "pushing".to_owned(),
+        percent: None,
+        message: format!(
+            "正在推送 {} 到 {remote_name}/{}",
+            current.name, input.remote_branch_name
+        ),
+    });
+
+    let refspec = format!("{}:{remote_full_name}", current.full_name);
+    let mut command = git_command(Some(&root), GitLocking::Required);
+    command
+        .args(["push", "--progress", "--set-upstream"])
+        .arg(lease)
+        .arg("--")
+        .arg(&remote_name)
+        .arg(refspec)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    run_network_process(
+        command,
+        cancellation,
+        progress,
+        deadline,
+        PUSH_CANCELLED_MESSAGE,
+        PUSH_TIMEOUT_MESSAGE,
+        push_target_failure,
+    )
+}
+
 /// Publishes one previously-read local tag to one configured remote.
 ///
 /// The UI cannot provide a URL, refspec, force mode, or extra Git flags. An
@@ -3748,7 +4034,7 @@ pub fn push_remote_tag(
     let root = repository_root(path)?;
     let tag = load_expected_local_tag(&root, &input.full_name, &input.expected_local_oid)?;
     let remote_name = validate_remote_name(&root, &input.remote_name)?;
-    let remote_url = remote_tag_push_url(&root, &remote_name)?.1;
+    let remote_url = single_remote_push_url(&root, &remote_name)?.1;
 
     if cancellation.load(Ordering::SeqCst) {
         return Err(CommandError::new(
@@ -3802,7 +4088,7 @@ pub fn preview_remote_tag_delete(
     let root = repository_root(path)?;
     let tag = load_expected_local_tag(&root, &input.full_name, &input.expected_local_oid)?;
     let remote_name = validate_remote_name(&root, &input.remote_name)?;
-    let (remote_snapshot, remote_url) = remote_tag_push_url(&root, &remote_name)?;
+    let (remote_snapshot, remote_url) = single_remote_push_url(&root, &remote_name)?;
 
     if cancellation.load(Ordering::SeqCst) {
         return Err(CommandError::new(
@@ -3869,7 +4155,7 @@ pub fn delete_remote_tag(
     validate_remote_tag_oid(&input.expected_remote_oid)?;
     validate_remote_token(&input.expected_token)?;
     let remote_name = validate_remote_name(&root, &input.remote_name)?;
-    let (remote_snapshot, remote_url) = remote_tag_push_url(&root, &remote_name)?;
+    let (remote_snapshot, remote_url) = single_remote_push_url(&root, &remote_name)?;
     let current_token = remote_tag_delete_token(
         token_namespace,
         &remote_snapshot,
@@ -5014,6 +5300,168 @@ pub fn preview_amend_commit(
     })
 }
 
+pub fn preview_amend_and_push(
+    path: &Path,
+    token_namespace: &Uuid,
+) -> Result<AmendAndPushPreview, CommandError> {
+    let root = repository_root(path)?;
+    let snapshot = amend_and_push_snapshot(&root, token_namespace)?;
+    Ok(AmendAndPushPreview {
+        current_branch: snapshot.amend.current_branch,
+        head_oid: snapshot.amend.head_oid.clone(),
+        current_subject: snapshot.amend.current_subject,
+        current_body: snapshot.amend.current_body,
+        staged_change_count: snapshot.amend.staged_change_count,
+        remote_name: snapshot.remote_name,
+        remote_branch_name: snapshot.remote_branch_name,
+        remote_full_name: snapshot.remote_full_name,
+        expected_remote_oid: snapshot.amend.head_oid,
+        token: snapshot.token,
+    })
+}
+
+pub fn amend_and_push(
+    path: &Path,
+    input: &AmendAndPushInput,
+    token_namespace: &Uuid,
+    cancellation: Arc<AtomicBool>,
+    progress: Arc<dyn Fn(FetchProgress) + Send + Sync>,
+) -> Result<(), CommandError> {
+    let deadline = OperationDeadline::new(PUSH_TIMEOUT);
+    let root = repository_root(path)?;
+    let subject = input.subject.trim();
+    let body = input.body.trim();
+    validate_commit_message(subject, body)?;
+    validate_amend_commit_token(&input.expected_token)?;
+
+    let snapshot = amend_and_push_snapshot(&root, token_namespace)?;
+    ensure_amend_and_push_snapshot_matches(&snapshot, &input.expected_token)?;
+    if cancellation.load(Ordering::SeqCst) {
+        return Err(CommandError::new(
+            "git_operation_cancelled",
+            PUSH_CANCELLED_MESSAGE,
+        ));
+    }
+
+    let mut inspect_command = git_command(Some(&root), GitLocking::Required);
+    inspect_command
+        .args(["ls-remote", "--refs", "--heads", "--"])
+        .arg(&snapshot.remote_url)
+        .arg(&snapshot.remote_full_name)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut inspect_command);
+    let inspected = run_network_output_process(
+        inspect_command,
+        Arc::clone(&cancellation),
+        deadline,
+        PUSH_CANCELLED_MESSAGE,
+        PUSH_TIMEOUT_MESSAGE,
+        fetch_failure,
+    )?;
+    let actual_remote_oid =
+        parse_optional_exact_remote_ref(&inspected, &snapshot.remote_full_name)?;
+    if actual_remote_oid.as_deref() != Some(snapshot.amend.head_oid.as_str()) {
+        return Err(CommandError::new(
+            "amend_push_remote_changed",
+            "远端上游已变化或不存在，修改提交和安全强推均已停止",
+        ));
+    }
+
+    let verified = amend_and_push_snapshot(&root, token_namespace)?;
+    ensure_amend_and_push_snapshot_matches(&verified, &input.expected_token)?;
+    let tree_oid = write_index_tree(&root)?;
+    ensure_amend_tree_matches(&verified.amend, &tree_oid)?;
+    let finalized = amend_and_push_snapshot(&root, token_namespace)?;
+    ensure_amend_and_push_snapshot_matches(&finalized, &input.expected_token)?;
+    ensure_amend_tree_matches(&finalized.amend, &tree_oid)?;
+
+    let mut message = subject.to_owned();
+    if !body.is_empty() {
+        message.push_str("\n\n");
+        message.push_str(body);
+    }
+    message.push('\n');
+    let new_oid =
+        create_amended_commit_object(&root, &tree_oid, &finalized.amend, message.as_bytes())?;
+    update_amended_branch(&root, &finalized.amend, &new_oid)?;
+
+    if cancellation.load(Ordering::SeqCst) {
+        return Err(CommandError::new(
+            "amend_push_partial",
+            format!(
+                "本地提交已从 {} 修改为 {}，但安全强推未完成：{}",
+                short_oid_for_message(&finalized.amend.head_oid),
+                short_oid_for_message(&new_oid),
+                PUSH_CANCELLED_MESSAGE
+            ),
+        ));
+    }
+
+    progress(FetchProgress {
+        phase: "pushing".to_owned(),
+        percent: None,
+        message: format!(
+            "正在安全强推修改后的提交到 {}/{}",
+            finalized.remote_name, finalized.remote_branch_name
+        ),
+    });
+    let lease = format!(
+        "--force-with-lease={}:{}",
+        finalized.remote_full_name, finalized.amend.head_oid
+    );
+    let refspec = format!(
+        "{}:{}",
+        finalized.amend.current_branch_ref, finalized.remote_full_name
+    );
+    let mut command = git_command(Some(&root), GitLocking::Required);
+    command
+        .args(["push", "--progress"])
+        .arg(lease)
+        .arg("--")
+        .arg(&finalized.remote_url)
+        .arg(refspec)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    run_network_process(
+        command,
+        cancellation,
+        progress,
+        deadline,
+        PUSH_CANCELLED_MESSAGE,
+        PUSH_TIMEOUT_MESSAGE,
+        amend_push_failure,
+    )
+    .map_err(|error| {
+        CommandError::new(
+            "amend_push_partial",
+            format!(
+                "本地提交已从 {} 修改为 {}，但安全强推未完成：{}",
+                short_oid_for_message(&finalized.amend.head_oid),
+                short_oid_for_message(&new_oid),
+                error.message
+            ),
+        )
+    })?;
+
+    // Pushing by the token-bound URL avoids a remote-config race between the
+    // server inspection and the write. Keep the local tracking ref current
+    // only when it still has the exact old value captured by the preview.
+    let _ = execute_write_os(
+        &root,
+        &[
+            OsString::from("update-ref"),
+            OsString::from(&finalized.remote_tracking_full_name),
+            OsString::from(&new_oid),
+            OsString::from(&finalized.amend.head_oid),
+        ],
+    );
+    Ok(())
+}
+
 pub fn amend_commit(
     path: &Path,
     input: &AmendCommitInput,
@@ -5066,6 +5514,23 @@ fn ensure_amend_snapshot_matches(
         "amend_snapshot_changed",
         "HEAD、当前分支或暂存内容已发生变化，请重新预览后再修改提交",
     ))
+}
+
+fn ensure_amend_and_push_snapshot_matches(
+    snapshot: &AmendAndPushSnapshot,
+    expected_token: &str,
+) -> Result<(), CommandError> {
+    if snapshot.token == expected_token {
+        return Ok(());
+    }
+    Err(CommandError::new(
+        "amend_push_snapshot_changed",
+        "HEAD、当前分支、暂存内容或远端上游配置已变化，请重新预览",
+    ))
+}
+
+fn short_oid_for_message(oid: &str) -> &str {
+    &oid[..oid.len().min(8)]
 }
 
 fn ensure_amend_not_published(snapshot: &AmendCommitSnapshot) -> Result<(), CommandError> {
@@ -5384,7 +5849,7 @@ fn load_expected_local_tag(
     Ok(tag)
 }
 
-fn remote_tag_push_url(
+fn single_remote_push_url(
     repository: &Path,
     remote_name: &str,
 ) -> Result<(RemoteSnapshot, String), CommandError> {
@@ -5392,7 +5857,7 @@ fn remote_tag_push_url(
     if snapshot.effective_push_urls.len() != 1 || snapshot.explicit_push_urls.len() > 1 {
         return Err(CommandError::new(
             "remote_multiple_push_urls_unsupported",
-            "该远端配置了多个 Push 地址，暂不支持远端标签操作",
+            "该远端配置了多个 Push 地址，暂不支持此远端写操作",
         ));
     }
     let remote_url = validate_remote_url(&snapshot.effective_push_urls[0])?;
@@ -5439,6 +5904,37 @@ fn parse_exact_remote_tag(output: &[u8], full_name: &str) -> Result<String, Comm
     }
     validate_remote_tag_oid(oid)?;
     Ok(oid.to_ascii_lowercase())
+}
+
+fn parse_optional_exact_remote_ref(
+    output: &[u8],
+    full_name: &str,
+) -> Result<Option<String>, CommandError> {
+    let text = String::from_utf8_lossy(output);
+    let mut matches = text.lines().filter(|line| !line.trim().is_empty());
+    let Some(line) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        return Err(CommandError::new(
+            "invalid_git_output",
+            "远端引用查询返回了多个结果",
+        ));
+    }
+    let Some((oid, reference)) = line.split_once('\t') else {
+        return Err(CommandError::new(
+            "invalid_git_output",
+            "无法解析远端引用查询结果",
+        ));
+    };
+    if reference != full_name {
+        return Err(CommandError::new(
+            "invalid_git_output",
+            "远端引用查询返回了非预期结果",
+        ));
+    }
+    validate_oid(oid)?;
+    Ok(Some(oid.to_ascii_lowercase()))
 }
 
 fn remote_tag_delete_token(
@@ -6484,6 +6980,42 @@ fn push_failure(status: ExitStatus, stderr: &[u8]) -> CommandError {
     )
 }
 
+fn publish_branch_failure(status: ExitStatus, stderr: &[u8]) -> CommandError {
+    let normalized = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if normalized.contains("stale info")
+        || normalized.contains("non-fast-forward")
+        || normalized.contains("fetch first")
+    {
+        return CommandError::new(
+            "publish_remote_branch_exists",
+            "远端分支已经存在，请更换名称或先创建本地跟踪分支",
+        );
+    }
+    push_failure(status, stderr)
+}
+
+fn push_target_failure(status: ExitStatus, stderr: &[u8]) -> CommandError {
+    let normalized = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if normalized.contains("stale info") {
+        return CommandError::new(
+            "push_target_changed",
+            "目标远端分支在推送前发生变化，安全 Push 已停止",
+        );
+    }
+    push_failure(status, stderr)
+}
+
+fn amend_push_failure(status: ExitStatus, stderr: &[u8]) -> CommandError {
+    let normalized = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if normalized.contains("stale info") {
+        return CommandError::new(
+            "amend_push_remote_changed",
+            "远端分支在修改提交后发生变化，精确 force-with-lease 已拒绝覆盖",
+        );
+    }
+    push_failure(status, stderr)
+}
+
 fn remote_tag_push_failure(status: ExitStatus, stderr: &[u8]) -> CommandError {
     let normalized = String::from_utf8_lossy(stderr).to_ascii_lowercase();
     if normalized.contains("stale info")
@@ -6798,6 +7330,141 @@ fn amend_commit_snapshot(
         index_tree_oid,
         token: Uuid::new_v5(token_namespace, &token_material).to_string(),
     })
+}
+
+fn amend_and_push_snapshot(
+    repository: &Path,
+    token_namespace: &Uuid,
+) -> Result<AmendAndPushSnapshot, CommandError> {
+    let amend = amend_commit_snapshot(repository, token_namespace)?;
+    let refs = repository_refs(repository)?;
+    let current = refs
+        .branches
+        .iter()
+        .find(|branch| branch.current && matches!(branch.kind, BranchKind::Local))
+        .ok_or_else(|| {
+            CommandError::new(
+                "amend_detached_head",
+                "Detached HEAD 不支持修改提交并安全强推，请先切换到本地分支",
+            )
+        })?;
+    if current.full_name != amend.current_branch_ref || current.oid != amend.head_oid {
+        return Err(CommandError::new(
+            "amend_push_snapshot_changed",
+            "当前分支在预览期间发生变化，请刷新后重试",
+        ));
+    }
+    let upstream = current.upstream.as_deref().ok_or_else(|| {
+        CommandError::new(
+            "amend_push_no_upstream",
+            "当前分支没有远端上游，不能修改提交并安全强推",
+        )
+    })?;
+    if current.upstream_missing {
+        return Err(CommandError::new(
+            "amend_push_upstream_missing",
+            "当前分支的远端上游已不存在，请先 Fetch 并重新确认",
+        ));
+    }
+    let Some((remote_name, remote_branch_name)) = upstream.split_once('/') else {
+        return Err(CommandError::new(
+            "amend_push_upstream_unsupported",
+            "当前上游不是受支持的远端跟踪分支",
+        ));
+    };
+    let remote_name = validate_remote_name(repository, remote_name)?;
+    validate_branch_name(repository, remote_branch_name)?;
+    if !refs.remotes.iter().any(|remote| remote.name == remote_name) {
+        return Err(CommandError::new(
+            "amend_push_upstream_missing",
+            "当前分支的远端已不存在，请刷新后重试",
+        ));
+    }
+
+    let remote_tracking_full_name = format!("refs/remotes/{upstream}");
+    let remote_tracking = refs
+        .branches
+        .iter()
+        .find(|branch| {
+            matches!(branch.kind, BranchKind::Remote)
+                && branch.full_name == remote_tracking_full_name
+        })
+        .ok_or_else(|| {
+            CommandError::new(
+                "amend_push_upstream_missing",
+                "本地没有当前上游的远端跟踪引用，请先 Fetch",
+            )
+        })?;
+    if remote_tracking.oid != amend.head_oid {
+        return Err(CommandError::new(
+            "amend_push_upstream_mismatch",
+            "当前上游并未精确指向待修改的 HEAD，安全强推已停止",
+        ));
+    }
+    let mut unsupported_blocking_refs = Vec::new();
+    for reference in &amend.blocking_refs {
+        if reference == &remote_tracking_full_name
+            || remote_head_aliases_upstream(repository, reference, &remote_tracking_full_name)?
+        {
+            continue;
+        }
+        unsupported_blocking_refs.push(reference);
+    }
+    if !unsupported_blocking_refs.is_empty()
+        || !amend
+            .blocking_refs
+            .iter()
+            .any(|reference| reference == &remote_tracking_full_name)
+    {
+        return Err(CommandError::new(
+            "amend_push_other_refs",
+            "除当前上游外仍有远端引用或标签包含该 HEAD，安全强推已停止",
+        ));
+    }
+
+    let (_, remote_url) = single_remote_push_url(repository, &remote_name)?;
+    let remote_full_name = format!("refs/heads/{remote_branch_name}");
+    let mut token_material = Vec::new();
+    append_token_bytes(&mut token_material, amend.token.as_bytes());
+    append_token_bytes(&mut token_material, remote_name.as_bytes());
+    append_token_bytes(&mut token_material, remote_branch_name.as_bytes());
+    append_token_bytes(&mut token_material, remote_full_name.as_bytes());
+    append_token_bytes(&mut token_material, remote_tracking_full_name.as_bytes());
+    append_token_bytes(&mut token_material, remote_url.as_bytes());
+    let token = Uuid::new_v5(token_namespace, &token_material).to_string();
+
+    Ok(AmendAndPushSnapshot {
+        amend,
+        remote_name,
+        remote_branch_name: remote_branch_name.to_owned(),
+        remote_full_name,
+        remote_tracking_full_name,
+        remote_url,
+        token,
+    })
+}
+
+fn remote_head_aliases_upstream(
+    repository: &Path,
+    reference: &str,
+    upstream_full_name: &str,
+) -> Result<bool, CommandError> {
+    if !reference.starts_with("refs/remotes/") || !reference.ends_with("/HEAD") {
+        return Ok(false);
+    }
+    let output = execute_os_allow_failure(
+        Some(repository),
+        &[
+            OsStr::new("symbolic-ref"),
+            OsStr::new("--quiet"),
+            OsStr::new(reference),
+        ],
+    )?;
+    match output.status.code() {
+        Some(0) => Ok(String::from_utf8_lossy(&output.stdout).trim() == upstream_full_name),
+        Some(1) => Ok(false),
+        _ => ensure_success(output).map(|_| false),
+    }
 }
 
 fn ensure_amend_operation_idle(repository: &Path) -> Result<(), CommandError> {
@@ -9451,6 +10118,193 @@ mod tests {
     }
 
     #[test]
+    fn publishes_a_new_remote_branch_and_sets_upstream() {
+        let directory = tempdir().unwrap();
+        let remote = directory.path().join("remote.git");
+        let client = directory.path().join("client");
+        fs::create_dir(&remote).unwrap();
+        fs::create_dir(&client).unwrap();
+        run_git(&remote, &["init", "--bare", "--quiet"]);
+        initialize_repository(&client);
+        fs::write(client.join("base.txt"), "base\n").unwrap();
+        run_git(&client, &["add", "base.txt"]);
+        run_git(&client, &["commit", "--quiet", "-m", "Base"]);
+        run_git(
+            &client,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        let local_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+
+        publish_current_branch(
+            &client,
+            &PublishBranchInput {
+                local_full_name: git_stdout(&client, &["symbolic-ref", "HEAD"]),
+                remote_name: "origin".to_owned(),
+                remote_branch_name: "feature/published".to_owned(),
+                expected_local_oid: local_oid.clone(),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap();
+
+        assert_eq!(
+            git_stdout(&remote, &["rev-parse", "refs/heads/feature/published"]),
+            local_oid
+        );
+        assert_eq!(
+            git_stdout(&client, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+            "origin/feature/published"
+        );
+    }
+
+    #[test]
+    fn pushes_to_a_selected_existing_remote_branch_and_sets_upstream() {
+        let directory = tempdir().unwrap();
+        let (remote, _, client, branch) = initialize_remote_clone(directory.path());
+        let remote_oid = git_stdout(&remote, &["rev-parse", &format!("refs/heads/{branch}")]);
+        fs::write(client.join("selected-target.txt"), "selected target\n").unwrap();
+        run_git(&client, &["add", "selected-target.txt"]);
+        run_git(&client, &["commit", "--quiet", "-m", "Selected target"]);
+        let local_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+
+        push_current_branch_to_target(
+            &client,
+            &PushBranchTargetInput {
+                local_full_name: git_stdout(&client, &["symbolic-ref", "HEAD"]),
+                remote_name: "origin".to_owned(),
+                remote_branch_name: branch.clone(),
+                expected_local_oid: local_oid.clone(),
+                expected_remote_oid: Some(remote_oid),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap();
+
+        assert_eq!(
+            git_stdout(&remote, &["rev-parse", &format!("refs/heads/{branch}")]),
+            local_oid
+        );
+        assert_eq!(
+            git_stdout(&client, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+            format!("origin/{branch}")
+        );
+    }
+
+    #[test]
+    fn selected_push_creates_only_absent_targets_and_refuses_stale_snapshots() {
+        let directory = tempdir().unwrap();
+        let (remote, source, client, branch) = initialize_remote_clone(directory.path());
+        fs::write(client.join("local.txt"), "local\n").unwrap();
+        run_git(&client, &["add", "local.txt"]);
+        run_git(&client, &["commit", "--quiet", "-m", "Local"]);
+        let local_full_name = git_stdout(&client, &["symbolic-ref", "HEAD"]);
+        let local_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+
+        let existing_as_new = push_current_branch_to_target(
+            &client,
+            &PushBranchTargetInput {
+                local_full_name: local_full_name.clone(),
+                remote_name: "origin".to_owned(),
+                remote_branch_name: branch.clone(),
+                expected_local_oid: local_oid.clone(),
+                expected_remote_oid: None,
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap_err();
+        assert_eq!(existing_as_new.code, "push_target_exists");
+
+        let stale_remote_oid = git_stdout(&remote, &["rev-parse", &format!("refs/heads/{branch}")]);
+        fs::write(source.join("remote.txt"), "remote\n").unwrap();
+        run_git(&source, &["add", "remote.txt"]);
+        run_git(&source, &["commit", "--quiet", "-m", "Remote"]);
+        run_git(&source, &["push", "--quiet", "origin", &branch]);
+        let stale = push_current_branch_to_target(
+            &client,
+            &PushBranchTargetInput {
+                local_full_name,
+                remote_name: "origin".to_owned(),
+                remote_branch_name: branch,
+                expected_local_oid: local_oid,
+                expected_remote_oid: Some(stale_remote_oid),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap_err();
+        assert_eq!(stale.code, "push_target_changed");
+    }
+
+    #[test]
+    fn publish_branch_refuses_stale_local_and_existing_remote_branches() {
+        let directory = tempdir().unwrap();
+        let remote = directory.path().join("remote.git");
+        let client = directory.path().join("client");
+        fs::create_dir(&remote).unwrap();
+        fs::create_dir(&client).unwrap();
+        run_git(&remote, &["init", "--bare", "--quiet"]);
+        initialize_repository(&client);
+        fs::write(client.join("base.txt"), "base\n").unwrap();
+        run_git(&client, &["add", "base.txt"]);
+        run_git(&client, &["commit", "--quiet", "-m", "Base"]);
+        run_git(
+            &client,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        let local_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+        let input = PublishBranchInput {
+            local_full_name: git_stdout(&client, &["symbolic-ref", "HEAD"]),
+            remote_name: "origin".to_owned(),
+            remote_branch_name: "feature/published".to_owned(),
+            expected_local_oid: local_oid.clone(),
+        };
+
+        let stale = publish_current_branch(
+            &client,
+            &PublishBranchInput {
+                expected_local_oid: "f".repeat(40),
+                ..input.clone()
+            },
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap_err();
+        assert_eq!(stale.code, "publish_local_branch_changed");
+
+        let original_branch = git_stdout(&client, &["branch", "--show-current"]);
+        run_git(&client, &["switch", "--quiet", "-c", "other-local"]);
+        let switched = publish_current_branch(
+            &client,
+            &input,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap_err();
+        assert_eq!(switched.code, "publish_local_branch_changed");
+        run_git(&client, &["switch", "--quiet", "--", &original_branch]);
+
+        publish_current_branch(
+            &client,
+            &input,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap();
+        run_git(&client, &["branch", "--unset-upstream"]);
+        let existing = publish_current_branch(
+            &client,
+            &input,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap_err();
+        assert_eq!(existing.code, "publish_remote_branch_exists");
+    }
+
+    #[test]
     fn push_requires_upstream_and_refuses_non_fast_forward() {
         let standalone = tempdir().unwrap();
         initialize_repository(standalone.path());
@@ -9871,6 +10725,192 @@ mod tests {
         run_git(repository, &["checkout", "--quiet", "--detach"]);
         let detached = preview_amend_commit(repository, &namespace).unwrap_err();
         assert_eq!(detached.code, "amend_detached_head");
+    }
+
+    #[test]
+    fn safely_amends_and_force_pushes_only_the_exact_current_upstream() {
+        let directory = tempdir().unwrap();
+        let (remote, _, client, branch) = initialize_remote_clone(directory.path());
+        let old_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+        fs::write(client.join("amended.txt"), "included\n").unwrap();
+        run_git(&client, &["add", "amended.txt"]);
+        let namespace = Uuid::new_v4();
+
+        let local_preview = preview_amend_commit(&client, &namespace).unwrap();
+        assert!(!local_preview.can_amend);
+        let preview = preview_amend_and_push(&client, &namespace).unwrap();
+        assert_eq!(preview.remote_name, "origin");
+        assert_eq!(preview.remote_branch_name, branch);
+        assert_eq!(preview.expected_remote_oid, old_oid);
+
+        amend_and_push(
+            &client,
+            &AmendAndPushInput {
+                subject: "Amended and pushed".to_owned(),
+                body: "Exact upstream only".to_owned(),
+                expected_token: preview.token,
+            },
+            &namespace,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap();
+
+        let new_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+        assert_ne!(new_oid, old_oid);
+        assert_eq!(
+            git_stdout(&remote, &["rev-parse", &format!("refs/heads/{branch}")]),
+            new_oid
+        );
+        assert_eq!(
+            commit_summary(&client, "HEAD").unwrap().subject,
+            "Amended and pushed"
+        );
+        assert!(status(&client).unwrap().changes.is_empty());
+    }
+
+    #[test]
+    fn rejects_changed_remote_before_amend_without_moving_local_head() {
+        let directory = tempdir().unwrap();
+        let (_, source, client, branch) = initialize_remote_clone(directory.path());
+        let old_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+        fs::write(client.join("local.txt"), "local\n").unwrap();
+        run_git(&client, &["add", "local.txt"]);
+        let namespace = Uuid::new_v4();
+        let preview = preview_amend_and_push(&client, &namespace).unwrap();
+
+        fs::write(source.join("remote.txt"), "remote\n").unwrap();
+        run_git(&source, &["add", "remote.txt"]);
+        run_git(&source, &["commit", "--quiet", "-m", "Remote moved"]);
+        run_git(
+            &source,
+            &[
+                "push",
+                "--quiet",
+                "origin",
+                &format!("HEAD:refs/heads/{branch}"),
+            ],
+        );
+
+        let error = amend_and_push(
+            &client,
+            &AmendAndPushInput {
+                subject: "Must not amend".to_owned(),
+                body: String::new(),
+                expected_token: preview.token,
+            },
+            &namespace,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "amend_push_remote_changed");
+        assert_eq!(git_stdout(&client, &["rev-parse", "HEAD"]), old_oid);
+    }
+
+    #[test]
+    fn exact_lease_rejection_reports_that_local_amend_remains() {
+        let directory = tempdir().unwrap();
+        let (remote, source, client, branch) = initialize_remote_clone(directory.path());
+        let old_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+        fs::write(client.join("local.txt"), "local\n").unwrap();
+        run_git(&client, &["add", "local.txt"]);
+        let namespace = Uuid::new_v4();
+        let preview = preview_amend_and_push(&client, &namespace).unwrap();
+        let source_for_race = source.clone();
+        let branch_for_race = branch.clone();
+        let raced = Arc::new(AtomicBool::new(false));
+        let raced_in_progress = Arc::clone(&raced);
+
+        let error = amend_and_push(
+            &client,
+            &AmendAndPushInput {
+                subject: "Local amend remains".to_owned(),
+                body: String::new(),
+                expected_token: preview.token,
+            },
+            &namespace,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(move |update| {
+                if update.phase != "pushing" || raced_in_progress.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                fs::write(source_for_race.join("race.txt"), "race\n").unwrap();
+                run_git(&source_for_race, &["add", "race.txt"]);
+                run_git(
+                    &source_for_race,
+                    &["commit", "--quiet", "-m", "Competing remote update"],
+                );
+                run_git(
+                    &source_for_race,
+                    &[
+                        "push",
+                        "--quiet",
+                        "origin",
+                        &format!("HEAD:refs/heads/{branch_for_race}"),
+                    ],
+                );
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "amend_push_partial");
+        assert!(error.message.contains("本地提交已从"));
+        assert!(error.message.contains("精确 force-with-lease"));
+        let local_oid = git_stdout(&client, &["rev-parse", "HEAD"]);
+        assert_ne!(local_oid, old_oid);
+        assert_eq!(
+            commit_summary(&client, "HEAD").unwrap().subject,
+            "Local amend remains"
+        );
+        assert_ne!(
+            git_stdout(&remote, &["rev-parse", &format!("refs/heads/{branch}")]),
+            local_oid
+        );
+    }
+
+    #[test]
+    fn amend_and_push_rejects_tags_other_remote_refs_and_stale_tokens() {
+        let directory = tempdir().unwrap();
+        let (_, _, client, _) = initialize_remote_clone(directory.path());
+        let namespace = Uuid::new_v4();
+
+        run_git(&client, &["tag", "v1.0.0"]);
+        assert_eq!(
+            preview_amend_and_push(&client, &namespace)
+                .unwrap_err()
+                .code,
+            "amend_push_other_refs"
+        );
+        run_git(&client, &["tag", "-d", "v1.0.0"]);
+
+        run_git(&client, &["update-ref", "refs/remotes/backup/main", "HEAD"]);
+        assert_eq!(
+            preview_amend_and_push(&client, &namespace)
+                .unwrap_err()
+                .code,
+            "amend_push_other_refs"
+        );
+        run_git(&client, &["update-ref", "-d", "refs/remotes/backup/main"]);
+
+        let preview = preview_amend_and_push(&client, &namespace).unwrap();
+        fs::write(client.join("stale.txt"), "stale\n").unwrap();
+        run_git(&client, &["add", "stale.txt"]);
+        let before = git_stdout(&client, &["rev-parse", "HEAD"]);
+        let error = amend_and_push(
+            &client,
+            &AmendAndPushInput {
+                subject: "Stale".to_owned(),
+                body: String::new(),
+                expected_token: preview.token,
+            },
+            &namespace,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(|_| {}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "amend_push_snapshot_changed");
+        assert_eq!(git_stdout(&client, &["rev-parse", "HEAD"]), before);
     }
 
     #[test]

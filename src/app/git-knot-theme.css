@@ -11,6 +11,20 @@
   --text-1: #211d1a;
   --text-2: #625c57;
   --text-3: #756f69;
+  --file-name-text: #202a36;
+  --file-directory-text: #687587;
+  --history-ref-local-text: #344458;
+  --history-ref-local-bg: #eef1f4;
+  --history-ref-local-border: #b8c0ca;
+  --history-ref-current-text: #a93408;
+  --history-ref-current-bg: #fff0e8;
+  --history-ref-current-border: #e6a181;
+  --history-ref-remote-text: #245b96;
+  --history-ref-remote-bg: #ebf2fa;
+  --history-ref-remote-border: #a9c2de;
+  --history-ref-tag-text: #85520a;
+  --history-ref-tag-bg: #faf1df;
+  --history-ref-tag-border: #d9bd82;
   --text-inverse: #fff8f2;
   --border: rgba(38, 31, 27, 0.105);
   --border-strong: rgba(38, 31, 27, 0.19);
@@ -28,6 +42,14 @@
   --success-soft: rgba(33, 115, 74, 0.1);
   --info: #2865a8;
   --info-soft: rgba(40, 101, 168, 0.1);
+  --graph-local: #2865a8;
+  --graph-remote: #7856a8;
+  --graph-primary: #d9470c;
+  --graph-rose: #b13f68;
+  --graph-cyan: #187d83;
+  --graph-violet: #6f52ad;
+  --graph-amber: #a65d00;
+  --graph-green: #21734a;
   --focus-ring: rgba(217, 71, 12, 0.34);
   --shadow-window: 0 20px 50px rgba(42, 31, 25, 0.08);
   --shadow-popover: 0 24px 70px rgba(34, 24, 18, 0.2), 0 2px 8px rgba(34, 24, 18, 0.1);
@@ -35,6 +57,7 @@
   --radius-surface: 12px;
   --radius-control: 8px;
   --radius-small: 6px;
+  --disabled-opacity: 0.48;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   color: var(--text-1);
   background: var(--app-bg);
@@ -52,6 +75,20 @@
   --text-1: #f1f0ed;
   --text-2: #aaa6a2;
   --text-3: #92959c;
+  --file-name-text: #eef2f7;
+  --file-directory-text: #aab4c2;
+  --history-ref-local-text: #e0e6ed;
+  --history-ref-local-bg: #252b33;
+  --history-ref-local-border: #4a5563;
+  --history-ref-current-text: #ff9b69;
+  --history-ref-current-bg: #3b241b;
+  --history-ref-current-border: #a94e25;
+  --history-ref-remote-text: #9bc7f4;
+  --history-ref-remote-bg: #1e3043;
+  --history-ref-remote-border: #456f9b;
+  --history-ref-tag-text: #f1c473;
+  --history-ref-tag-bg: #382f1e;
+  --history-ref-tag-border: #79633a;
   --text-inverse: #17100c;
   --border: rgba(255, 255, 255, 0.082);
   --border-strong: rgba(255, 255, 255, 0.15);
@@ -69,6 +106,14 @@
   --success-soft: rgba(87, 191, 130, 0.12);
   --info: #73a9e6;
   --info-soft: rgba(115, 169, 230, 0.12);
+  --graph-local: #73a9e6;
+  --graph-remote: #b596e8;
+  --graph-primary: #ff6417;
+  --graph-rose: #ec7da2;
+  --graph-cyan: #5bc2c5;
+  --graph-violet: #ad91ed;
+  --graph-amber: #eaa54c;
+  --graph-green: #57bf82;
   --focus-ring: rgba(255, 100, 23, 0.4);
   --shadow-window: 0 20px 60px rgba(0, 0, 0, 0.28);
   --shadow-popover: 0 28px 80px rgba(0, 0, 0, 0.5), 0 2px 12px rgba(0, 0, 0, 0.26);
@@ -117,7 +162,7 @@ button:disabled,
 input:disabled,
 textarea:disabled,
 select:disabled {
-  opacity: 0.48;
+  opacity: var(--disabled-opacity);
 }
 
 .app-shell {
@@ -997,6 +1042,20 @@ textarea::placeholder {
   background: var(--accent-soft);
 }
 
+:root[data-theme="light"] .confirmation-dialog .merge-preview-grid > div,
+:root[data-theme="dark"] .confirmation-dialog .merge-preview-grid > div {
+  border-color: var(--border);
+  color: var(--text-1);
+  background: var(--surface-2);
+}
+
+:root[data-theme="light"] .confirmation-dialog .amend-dialog-note,
+:root[data-theme="dark"] .confirmation-dialog .amend-dialog-note {
+  border-color: var(--border);
+  color: var(--text-2);
+  background: var(--warning-soft);
+}
+
 .history-ref-chip.remote,
 .submodule-state.modified {
   color: var(--info);
@@ -1101,10 +1160,20 @@ input[type="radio"] {
 .panel-message.error-message,
 .amend-preview-error,
 .merge-recovery-error,
-.confirmation-dialog > p.clone-inline-error {
+.confirmation-dialog > p.clone-inline-error,
+.confirmation-dialog > p.error-message {
   border-color: color-mix(in srgb, var(--danger) 25%, transparent);
   color: var(--danger);
   background: var(--danger-soft);
+}
+
+.confirmation-dialog > p.error-message {
+  margin: 12px 0 0;
+  border: 1px solid;
+  border-radius: var(--radius-control);
+  padding: 10px;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .operation-warning,
@@ -1400,7 +1469,7 @@ button:disabled {
 
 .commit-menu-popover > button:disabled {
   color: var(--text-3);
-  opacity: 0.55;
+  opacity: var(--disabled-opacity);
 }
 
 .commit-menu-separator {
@@ -1806,7 +1875,7 @@ select,
 
 .project-context-menu > button:disabled {
   cursor: not-allowed;
-  opacity: 0.4;
+  opacity: var(--disabled-opacity);
 }
 
 .project-context-separator {
@@ -1983,7 +2052,7 @@ select,
 
 .commit-context-menu > button:disabled {
   cursor: not-allowed;
-  opacity: 0.38;
+  opacity: var(--disabled-opacity);
 }
 
 .commit-context-separator {
@@ -3678,7 +3747,7 @@ select optgroup {
 
 .history-more-popover button:disabled {
   color: var(--text-3);
-  opacity: 0.55;
+  opacity: var(--disabled-opacity);
 }
 
 .history-more-separator {
@@ -4314,12 +4383,17 @@ select:focus-visible,
 
 input:not([type="checkbox"]):not([type="radio"]),
 textarea,
+select {
+  font-size: 11px;
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
 select,
-.themed-select-trigger {
+.themed-select {
   min-height: 32px;
   border-radius: var(--radius-control);
   box-shadow: none;
-  font-size: 11px;
 }
 
 textarea {
@@ -5169,24 +5243,12 @@ textarea::placeholder {
 }
 
 .commit-inline-file-path {
-  color: var(--text-1);
+  color: var(--file-name-text);
   font-weight: 560;
 }
 
 .commit-inline-directory {
-  color: var(--text-2);
-}
-
-:root[data-theme="dark"] .commit-inline-file-path {
-  color: #e4e7eb;
-}
-
-:root[data-theme="dark"] .commit-inline-directory {
-  color: #aeb4bd;
-}
-
-:root[data-theme="light"] .commit-inline-file-path {
-  color: #34302d;
+  color: var(--file-directory-text);
 }
 
 /* GitHub Release updater */
@@ -5422,12 +5484,15 @@ pre,
 }
 
 .repository-workbench .scm-path strong {
+  color: var(--file-name-text);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 550;
 }
 
 .repository-workbench .scm-path small {
+  color: var(--file-directory-text);
   font-size: 9.5px;
+  font-weight: 450;
   line-height: 1.35;
 }
 
@@ -5453,21 +5518,19 @@ pre,
 }
 
 .commit-row .history-ref-chip {
-  position: relative;
-  top: 1px;
   height: 17px;
   min-height: 17px;
   justify-content: center;
-  border-color: var(--border-strong) !important;
+  border-color: var(--history-ref-local-border) !important;
   padding: 0 5px;
-  color: var(--text-1) !important;
-  background: var(--surface-2) !important;
-  font-size: 10px;
-  font-weight: 600;
+  color: var(--history-ref-local-text) !important;
+  background: var(--history-ref-local-bg) !important;
+  font-size: 10.5px;
+  font-weight: 650;
   line-height: 1;
   letter-spacing: 0;
-  text-rendering: geometricPrecision;
-  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: auto;
 }
 
 .commit-row .history-ref-chip-label {
@@ -5479,19 +5542,21 @@ pre,
 }
 
 .commit-row .history-ref-chip.current {
-  border-color: var(--accent-medium) !important;
-  color: var(--accent) !important;
-  background: var(--accent-soft) !important;
+  border-color: var(--history-ref-current-border) !important;
+  color: var(--history-ref-current-text) !important;
+  background: var(--history-ref-current-bg) !important;
 }
 
 .commit-row .history-ref-chip.remote {
-  color: var(--info) !important;
-  background: var(--info-soft) !important;
+  border-color: var(--history-ref-remote-border) !important;
+  color: var(--history-ref-remote-text) !important;
+  background: var(--history-ref-remote-bg) !important;
 }
 
 .commit-row .history-ref-chip.tag {
-  color: var(--warning) !important;
-  background: var(--warning-soft) !important;
+  border-color: var(--history-ref-tag-border) !important;
+  color: var(--history-ref-tag-text) !important;
+  background: var(--history-ref-tag-bg) !important;
 }
 
 .commit-row-author {
@@ -5505,6 +5570,7 @@ pre,
 }
 
 .commit-inline-directory {
+  color: var(--file-directory-text);
   font-size: 10px;
   font-weight: 500;
 }
@@ -5519,9 +5585,86 @@ pre,
 }
 
 .commit-inline-file-path {
+  color: var(--file-name-text);
   font-size: 10.5px;
-  font-weight: 500;
+  font-weight: 550;
   line-height: 1.35;
+}
+
+/* Shared file-kind markers, matching the compact Git UI Pro file list. */
+.file-type-badge,
+.file-type-badge.scm-file-type {
+  display: inline-grid;
+  width: fit-content;
+  min-width: 22px;
+  max-width: 30px;
+  height: 17px;
+  flex: none;
+  place-items: center;
+  justify-self: center;
+  border: 1px solid color-mix(in srgb, var(--text-3) 42%, var(--border));
+  border-radius: 4px;
+  padding: 0 2px;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--text-3) 7%, transparent);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.file-type-badge[data-file-tone="git"] {
+  border-color: color-mix(in srgb, #4f86c6 46%, var(--border));
+  color: color-mix(in srgb, #4f86c6 82%, var(--text-1));
+  background: color-mix(in srgb, #4f86c6 9%, transparent);
+}
+
+.file-type-badge[data-file-tone="config"] {
+  border-color: color-mix(in srgb, #9a67d7 46%, var(--border));
+  color: color-mix(in srgb, #9a67d7 82%, var(--text-1));
+  background: color-mix(in srgb, #9a67d7 9%, transparent);
+}
+
+.file-type-badge[data-file-tone="image"] {
+  border-color: color-mix(in srgb, #dd648d 46%, var(--border));
+  color: color-mix(in srgb, #dd648d 82%, var(--text-1));
+  background: color-mix(in srgb, #dd648d 9%, transparent);
+}
+
+.file-type-badge[data-file-tone="web"] {
+  border-color: color-mix(in srgb, #dd704c 46%, var(--border));
+  color: color-mix(in srgb, #dd704c 82%, var(--text-1));
+  background: color-mix(in srgb, #dd704c 9%, transparent);
+}
+
+.file-type-badge[data-file-tone="code"] {
+  border-color: color-mix(in srgb, #d79a35 48%, var(--border));
+  color: color-mix(in srgb, #d79a35 84%, var(--text-1));
+  background: color-mix(in srgb, #d79a35 9%, transparent);
+}
+
+.file-type-badge[data-file-type="RS"],
+.file-type-badge[data-file-type="VUE"],
+.file-type-badge[data-file-type="GO"] {
+  border-color: color-mix(in srgb, var(--success) 46%, var(--border));
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+}
+
+.commit-inline-file {
+  grid-template-columns: 28px minmax(0, 1fr) 22px;
+  gap: 6px;
+}
+
+.commit-inline-file .commit-file-status {
+  min-width: 18px;
+  justify-self: end;
+  border-radius: 3px;
+  padding: 2px 3px;
+  font-size: 8px;
+  line-height: 1;
+  text-align: center;
 }
 
 .branch-row-copy strong,
@@ -5530,6 +5673,149 @@ pre,
 .remote-card > header strong {
   font-size: 11px;
   font-weight: 600;
+}
+
+.publish-branch-dialog {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.push-target-dialog {
+  width: min(500px, calc(100vw - 32px));
+}
+
+.push-target-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+  background: var(--surface-2);
+}
+
+.push-target-mode > button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-2);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.push-target-mode > button:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--surface-hover);
+}
+
+.push-target-mode > button.selected {
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+.push-target-mode > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.push-target-mode > button:disabled {
+  opacity: var(--disabled-opacity);
+}
+
+.push-target-fields {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.42fr) minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.push-target-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.push-target-fields label > span {
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.push-target-fields .themed-select,
+.push-target-fields input {
+  width: 100%;
+  min-height: 34px;
+}
+
+.confirmation-dialog > p.push-target-safety {
+  margin: 10px 0 0;
+  color: var(--text-1);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.publish-branch-target {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.42fr) minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.publish-branch-target label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.publish-branch-target label > span,
+.publish-branch-summary dt {
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.publish-branch-target .themed-select,
+.publish-branch-target input {
+  width: 100%;
+  min-height: 34px;
+}
+
+.publish-branch-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin: 12px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--border);
+}
+
+.publish-branch-summary > div {
+  min-width: 0;
+  padding: 9px 10px;
+  background: var(--surface-2);
+}
+
+.publish-branch-summary dd {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: var(--text-1);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .publish-branch-target,
+  .publish-branch-summary,
+  .push-target-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .branch-row-copy small,

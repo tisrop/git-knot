@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { MagnifyingGlass } from "@phosphor-icons/react";
 import { Dialog } from "../../app/Dialog";
+import { PublishBranchDialog } from "./PublishBranchDialog";
 import {
   desktopApi,
   type BranchInfo,
@@ -55,6 +56,7 @@ function BranchRow({
   pullLabel,
   onPush,
   pushLabel,
+  pushDisabled,
   onTrack,
   trackLabel,
   trackDisabled,
@@ -70,6 +72,7 @@ function BranchRow({
   pullLabel?: string;
   onPush?: () => void;
   pushLabel?: string;
+  pushDisabled?: boolean;
   onTrack?: () => void;
   trackLabel?: string;
   trackDisabled?: boolean;
@@ -113,8 +116,16 @@ function BranchRow({
             <button
               className="secondary-button compact-button"
               type="button"
-              disabled={busy || !branch.upstream || branch.upstreamMissing || branch.ahead <= 0}
-              title="只推送当前分支到已配置的上游，不支持 force push 或创建远端分支"
+              disabled={
+                busy ||
+                pushDisabled ||
+                Boolean(branch.upstream && (branch.upstreamMissing || branch.ahead <= 0))
+              }
+              title={
+                branch.upstream
+                  ? "只推送当前分支到已配置的上游，不支持 force push"
+                  : "选择远端并创建新的远端分支"
+              }
               onClick={onPush}
             >
               {pushLabel ?? "Push"}
@@ -207,6 +218,8 @@ export function BranchesView({
     | null
   >(null);
   const [remoteDeletePreview, setRemoteDeletePreview] = useState<RemoteDeletePreview | null>(null);
+  const [publishBranch, setPublishBranch] = useState<BranchInfo | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
   const request = useRef(0);
   const handledTerminalOperations = useRef(new Set<string>());
   const activeRepositoryPath = useRef(project.path);
@@ -258,6 +271,8 @@ export function BranchesView({
     setBusyAction(null);
     setNotice(null);
     setDeleteConfirmation(null);
+    setPublishBranch(null);
+    setPublishError(null);
     setMergeConfirmation(null);
     setRemoteForm(null);
     setRemoteDeletePreview(null);
@@ -547,7 +562,17 @@ export function BranchesView({
   async function pushCurrentBranch() {
     if (busyAction || loading) return;
     const current = refs?.branches.find((branch) => branch.current && branch.kind === "local");
-    if (!current || !current.upstream || current.upstreamMissing || current.ahead <= 0) return;
+    if (!current) return;
+    if (!current.upstream) {
+      if (!refs?.remotes.length) {
+        onError("当前仓库没有可用于发布分支的远端");
+        return;
+      }
+      setPublishError(null);
+      setPublishBranch(current);
+      return;
+    }
+    if (current.upstreamMissing || current.ahead <= 0) return;
     const repositoryPath = project.path;
     const requestId = ++request.current;
     const isCurrentRequest = () =>
@@ -576,6 +601,43 @@ export function BranchesView({
       if (!isCurrentRequest()) return;
       setBusyAction(null);
       onError(errorMessage(cause));
+    }
+  }
+
+  async function confirmPublishBranch(
+    input: Parameters<typeof desktopApi.repository.publishBranch>[1],
+  ) {
+    if (busyAction || loading || !publishBranch) return;
+    const repositoryPath = project.path;
+    const requestId = ++request.current;
+    const isCurrentRequest = () =>
+      isCurrentRepositoryRequest(
+        activeRepositoryPath.current,
+        repositoryPath,
+        request.current,
+        requestId,
+      );
+    setBusyAction("push");
+    setPublishError(null);
+    setNotice(null);
+    try {
+      const started = await desktopApi.repository.publishBranch(repositoryPath, input);
+      if (!isCurrentRequest()) return;
+      setPublishBranch(null);
+      onOperationStarted({
+        operationId: started.operationId,
+        repositoryPath,
+        kind: "push",
+        state: "queued",
+        phase: "queued",
+        percent: null,
+        message: `正在等待发布到 ${input.remoteName}/${input.remoteBranchName}`,
+        remoteTagDeletePreview: null,
+      });
+    } catch (cause) {
+      if (!isCurrentRequest()) return;
+      setBusyAction(null);
+      setPublishError(errorMessage(cause));
     }
   }
 
@@ -823,7 +885,8 @@ export function BranchesView({
               onPull={branch.current ? () => void pullCurrentBranch() : undefined}
               pullLabel={busyAction === "pull" ? "Pull 中…" : "Pull"}
               onPush={branch.current ? () => void pushCurrentBranch() : undefined}
-              pushLabel={busyAction === "push" ? "Push 中…" : "Push"}
+              pushLabel={busyAction === "push" ? "Push 中…" : branch.upstream ? "Push" : "发布"}
+              pushDisabled={!branch.upstream && !refs?.remotes.length}
               onDelete={
                 branch.current
                   ? undefined
@@ -958,7 +1021,7 @@ export function BranchesView({
         </div>
         <p className="remote-roadmap-note">
           远端增删改由 Rust 校验并进入仓库写队列；Fetch、仅快进 Pull 和当前分支 Push
-          均可取消且带硬超时。不支持 Gitee、force push、远端分支创建或自动 merge/rebase。
+          均可取消且带硬超时。不支持 Gitee、force push 或自动 merge/rebase。
         </p>
       </aside>
       {remoteForm ? (
@@ -1207,6 +1270,19 @@ export function BranchesView({
             </button>
           </div>
         </Dialog>
+      ) : null}
+      {publishBranch ? (
+        <PublishBranchDialog
+          branch={publishBranch}
+          busy={busyAction === "push"}
+          error={publishError}
+          remoteNames={(refs?.remotes ?? []).map((remote) => remote.name)}
+          onClose={() => {
+            setPublishBranch(null);
+            setPublishError(null);
+          }}
+          onPublish={(input) => void confirmPublishBranch(input)}
+        />
       ) : null}
       {mergeConfirmation ? (
         <Dialog

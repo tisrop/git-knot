@@ -23,28 +23,33 @@ import {
 } from "@phosphor-icons/react";
 import {
   desktopApi,
+  type AmendAndPushPreview,
   type AmendCommitPreview,
+  type BranchInfo,
   type ConflictDetails,
   type ConflictResolutionChoice,
   type GitOperationEvent,
   type MergeRecoveryPreview,
   type Project,
+  type PushBranchTargetInput,
+  type RepositoryRefs,
   type RepositoryStatus,
   type ResetCommitMode,
   type ResetCommitPreview,
   type WorktreeDiff,
 } from "../../platform/desktop";
 import { Dialog } from "../../app/Dialog";
+import { FileTypeBadge } from "../../app/FileTypeBadge";
 import { UnifiedDiffView } from "../diff/UnifiedDiffView";
 import { ImageDiffView } from "../diff/ImageDiffView";
 import { parseUnifiedDiff } from "../history/history";
-import { isActiveGitOperation } from "../operations/gitOperations";
+import { isActiveGitOperation, isTerminalGitOperation } from "../operations/gitOperations";
 import { summarizeRepositoryStatus } from "../repository/status";
+import { PushBranchTargetDialog } from "./PushBranchTargetDialog";
 import {
   groupWorkspaceChanges,
   pathspecsForChange,
   workspaceEntryKey,
-  workspaceFileType,
   workspaceMutationBlocked,
   workspaceStatusLabel,
   type WorkspaceEntry,
@@ -76,7 +81,7 @@ interface PendingConflictResolution {
 }
 
 type MergeRecoveryAction = "continue" | "abort";
-type CommitFollowUp = "none" | "push" | "sync";
+type CommitFollowUp = "none" | "push-target" | "sync";
 type AmendIntent = "submit" | "edit-message";
 
 interface PendingUndoCommit {
@@ -85,7 +90,18 @@ interface PendingUndoCommit {
   message: string;
 }
 
-const COMMIT_REMOTE_OPERATION_KINDS = new Set<GitOperationEvent["kind"]>(["pull", "push", "sync"]);
+interface PendingPushTarget {
+  branch: BranchInfo;
+  commitBeforePush: boolean;
+  refs: RepositoryRefs;
+}
+
+const COMMIT_REMOTE_OPERATION_KINDS = new Set<GitOperationEvent["kind"]>([
+  "amend_push",
+  "pull",
+  "push",
+  "sync",
+]);
 
 function errorMessage(error: unknown) {
   if (typeof error === "string") return error;
@@ -202,7 +218,6 @@ function WorkspaceSection({
         const pathParts = entry.change.path.split(/[\\/]/).filter(Boolean);
         const fileName = pathParts.at(-1) ?? entry.change.path;
         const directory = pathParts.slice(0, -1).join("/");
-        const fileType = workspaceFileType(entry.change.path);
         const changeType = workspaceStatusLabel(entry.change, entry.staged);
         return (
           <div
@@ -215,9 +230,7 @@ function WorkspaceSection({
               aria-pressed={isSelected}
               onClick={() => onSelect(entry)}
             >
-              <span className="scm-file-type" data-file-type={fileType} aria-hidden="true">
-                {fileType}
-              </span>
+              <FileTypeBadge path={entry.change.path} className="scm-file-type" />
               <span className="scm-path">
                 <strong title={entry.change.path}>{fileName}</strong>
                 {directory ? <small title={entry.change.path}>{directory}</small> : null}
@@ -309,16 +322,22 @@ export function WorkspaceView({
   const [pendingMergeRecoveryAction, setPendingMergeRecoveryAction] =
     useState<MergeRecoveryAction | null>(null);
   const [amendPreview, setAmendPreview] = useState<AmendCommitPreview | null>(null);
+  const [amendPushPreview, setAmendPushPreview] = useState<AmendAndPushPreview | null>(null);
   const [loadingAmendPreview, setLoadingAmendPreview] = useState(false);
   const [amendPreviewError, setAmendPreviewError] = useState<string | null>(null);
   const [pendingAmendConfirmation, setPendingAmendConfirmation] = useState(false);
+  const [pendingAmendPushConfirmation, setPendingAmendPushConfirmation] = useState(false);
+  const [amendPushOperationId, setAmendPushOperationId] = useState<string | null>(null);
   const [commitMenuOpen, setCommitMenuOpen] = useState(false);
   const [commitMenuPosition, setCommitMenuPosition] = useState<{
     left: number;
     top: number;
   } | null>(null);
   const [pendingUndoCommit, setPendingUndoCommit] = useState<PendingUndoCommit | null>(null);
+  const [pendingPushTarget, setPendingPushTarget] = useState<PendingPushTarget | null>(null);
+  const [pushTargetError, setPushTargetError] = useState<string | null>(null);
   const diffRequest = useRef(0);
+  const loadedDiffKey = useRef<string | null>(null);
   const mergeRecoveryRequest = useRef(0);
   const amendPreviewRequest = useRef(0);
   const resetPreviewRequest = useRef(0);
@@ -331,6 +350,7 @@ export function WorkspaceView({
 
   useEffect(() => {
     ++diffRequest.current;
+    loadedDiffKey.current = null;
     setSelected(null);
     setDiff(null);
     setConflictDetails(null);
@@ -345,14 +365,19 @@ export function WorkspaceView({
     setPendingMergeRecoveryAction(null);
     ++amendPreviewRequest.current;
     setAmendPreview(null);
+    setAmendPushPreview(null);
     setLoadingAmendPreview(false);
     setAmendPreviewError(null);
     setPendingAmendConfirmation(false);
+    setPendingAmendPushConfirmation(false);
+    setAmendPushOperationId(null);
     setBusyAction(null);
     setCommitMenuOpen(false);
     setCommitMenuPosition(null);
     ++resetPreviewRequest.current;
     setPendingUndoCommit(null);
+    setPendingPushTarget(null);
+    setPushTargetError(null);
     setCommitMessage("");
   }, [project.path]);
 
@@ -468,8 +493,32 @@ export function WorkspaceView({
   );
 
   useEffect(() => {
+    if (!amendPushOperationId) return;
+    const operation = gitOperations.find(
+      (candidate) => candidate.operationId === amendPushOperationId,
+    );
+    if (!operation || !isTerminalGitOperation(operation)) return;
+    ++amendPreviewRequest.current;
+    setAmendPushOperationId(null);
+    setPendingAmendPushConfirmation(false);
+    setBusyAction(null);
+    onHistoryChange?.();
+    if (operation.state === "succeeded") {
+      setAmendPreview(null);
+      setAmendPushPreview(null);
+      setCommitMessage("");
+      setAmendPreviewError(null);
+      setNotice(operation.message);
+    } else {
+      setAmendPreviewError(operation.message);
+    }
+    void onRefresh();
+  }, [amendPushOperationId, gitOperations, onHistoryChange, onRefresh]);
+
+  useEffect(() => {
     if (!selected || !status) {
       ++diffRequest.current;
+      loadedDiffKey.current = null;
       setDiff(null);
       setConflictDetails(null);
       setLoadingDiff(false);
@@ -477,10 +526,18 @@ export function WorkspaceView({
     }
 
     const requestId = ++diffRequest.current;
-    setLoadingDiff(true);
+    const diffKey = `${selectedIsConflict ? "conflict" : "diff"} ${project.path} ${targetKey(selected)}`;
+    // A background refresh re-runs this effect for the file already on screen.
+    // Keep the current patch visible until the new one arrives; only switching
+    // targets is worth blanking the panel for.
+    const targetChanged = loadedDiffKey.current !== diffKey;
+    loadedDiffKey.current = diffKey;
+    if (targetChanged) {
+      setDiff(null);
+      setConflictDetails(null);
+      setLoadingDiff(true);
+    }
     setDiffError(null);
-    setDiff(null);
-    setConflictDetails(null);
     const request = selectedIsConflict
       ? desktopApi.repository.conflictDetails(project.path, selected.path)
       : desktopApi.repository.worktreeDiff(project.path, selected.path, selected.staged);
@@ -491,7 +548,10 @@ export function WorkspaceView({
         else setDiff(preview as WorktreeDiff);
       })
       .catch((cause) => {
-        if (diffRequest.current === requestId) setDiffError(errorMessage(cause));
+        if (diffRequest.current !== requestId) return;
+        setDiff(null);
+        setConflictDetails(null);
+        setDiffError(errorMessage(cause));
       })
       .finally(() => {
         if (diffRequest.current === requestId) setLoadingDiff(false);
@@ -615,7 +675,10 @@ export function WorkspaceView({
     }
   }
 
-  async function createNewCommit(followUp: CommitFollowUp) {
+  async function createNewCommit(
+    followUp: CommitFollowUp,
+    pushTarget: PushBranchTargetInput | null = null,
+  ) {
     const repositoryPath = project.path;
     const { subject, body } = splitCommitMessage(commitMessage);
     if (
@@ -627,8 +690,10 @@ export function WorkspaceView({
     )
       return;
 
+    if (followUp === "push-target" && !pushTarget) return;
     setBusyAction(followUp === "none" ? "commit" : `commit-${followUp}`);
     setNotice(null);
+    setPushTargetError(null);
     try {
       if (groups.staged.length === 0) {
         const staged = await desktopApi.repository.stageAll(repositoryPath);
@@ -650,35 +715,96 @@ export function WorkspaceView({
 
       try {
         const started =
-          followUp === "push"
-            ? await desktopApi.repository.push(repositoryPath)
+          followUp === "push-target"
+            ? await desktopApi.repository.pushBranchTarget(repositoryPath, {
+                ...pushTarget!,
+                expectedLocalOid: result.commit.oid,
+              })
             : await desktopApi.repository.sync(repositoryPath);
+        const operationKind = followUp === "push-target" ? "push" : "sync";
         onOperationStarted({
           operationId: started.operationId,
           repositoryPath,
-          kind: followUp,
+          kind: operationKind,
           state: "queued",
           phase: "queued",
           percent: null,
-          message: followUp === "push" ? "正在等待推送当前分支" : "正在等待同步当前分支",
+          message:
+            followUp === "push-target"
+              ? `正在等待推送到 ${pushTarget!.remoteName}/${pushTarget!.remoteBranchName}`
+              : "正在等待同步当前分支",
           remoteTagDeletePreview: null,
         });
         if (activeRepositoryPath.current === repositoryPath) {
+          if (followUp === "push-target") setPendingPushTarget(null);
           setNotice(
-            followUp === "push"
+            followUp === "push-target"
               ? `已创建提交 ${shortCommit}，正在推送`
               : `已创建提交 ${shortCommit}，正在同步`,
           );
         }
       } catch (cause) {
         if (activeRepositoryPath.current === repositoryPath) {
-          onError(
-            `已创建提交 ${shortCommit}，但${followUp === "push" ? "推送" : "同步"}未能启动：${errorMessage(cause)}`,
-          );
+          const message = `已创建提交 ${shortCommit}，但${followUp === "push-target" ? "推送" : "同步"}未能启动：${errorMessage(cause)}`;
+          if (followUp === "push-target") setPushTargetError(message);
+          else onError(message);
         }
       }
     } catch (cause) {
+      if (activeRepositoryPath.current === repositoryPath) {
+        if (followUp === "push-target") setPushTargetError(errorMessage(cause));
+        else onError(errorMessage(cause));
+      }
+    } finally {
+      if (activeRepositoryPath.current === repositoryPath) setBusyAction(null);
+    }
+  }
+
+  async function openPushTarget(commitBeforePush: boolean) {
+    if (mutationBlocked()) return;
+    const repositoryPath = project.path;
+    setBusyAction("load-push-target");
+    setNotice(null);
+    setPushTargetError(null);
+    try {
+      const refs = await desktopApi.repository.refs(repositoryPath);
+      if (activeRepositoryPath.current !== repositoryPath) return;
+      const branch = refs.branches.find(
+        (candidate) => candidate.current && candidate.kind === "local",
+      );
+      if (!branch) throw new Error("当前处于 detached HEAD，无法推送当前分支");
+      if (refs.remotes.length === 0) throw new Error("当前仓库没有可用于推送的远端");
+      setPendingPushTarget({ branch, commitBeforePush, refs });
+    } catch (cause) {
       if (activeRepositoryPath.current === repositoryPath) onError(errorMessage(cause));
+    } finally {
+      if (activeRepositoryPath.current === repositoryPath) setBusyAction(null);
+    }
+  }
+
+  async function pushSelectedTarget(input: PushBranchTargetInput) {
+    if (mutationBlocked()) return;
+    const repositoryPath = project.path;
+    setBusyAction("push-target");
+    setNotice(null);
+    setPushTargetError(null);
+    try {
+      const started = await desktopApi.repository.pushBranchTarget(repositoryPath, input);
+      if (activeRepositoryPath.current !== repositoryPath) return;
+      setPendingPushTarget(null);
+      onOperationStarted({
+        operationId: started.operationId,
+        repositoryPath,
+        kind: "push",
+        state: "queued",
+        phase: "queued",
+        percent: null,
+        message: `正在等待推送到 ${input.remoteName}/${input.remoteBranchName}`,
+        remoteTagDeletePreview: null,
+      });
+      setNotice(`正在推送到 ${input.remoteName}/${input.remoteBranchName}`);
+    } catch (cause) {
+      if (activeRepositoryPath.current === repositoryPath) setPushTargetError(errorMessage(cause));
     } finally {
       if (activeRepositoryPath.current === repositoryPath) setBusyAction(null);
     }
@@ -700,14 +826,25 @@ export function WorkspaceView({
     setBusyAction("preview-amend");
     setNotice(null);
     setAmendPreviewError(null);
+    setAmendPushPreview(null);
     try {
       const refreshed = await desktopApi.repository.previewAmendCommit(repositoryPath);
       if (amendPreviewRequest.current !== requestId) return;
       setAmendPreview(refreshed);
       if (!refreshed.canAmend) {
-        setAmendPreviewError("当前 HEAD 已被本地已知的远端引用或标签引用，不能安全修改。");
+        try {
+          const safePush = await desktopApi.repository.previewAmendAndPush(repositoryPath);
+          if (amendPreviewRequest.current !== requestId) return;
+          setAmendPushPreview(safePush);
+          setPendingAmendPushConfirmation(true);
+        } catch (cause) {
+          if (amendPreviewRequest.current === requestId) {
+            setAmendPreviewError(errorMessage(cause));
+          }
+        }
         return;
       }
+      setAmendPushPreview(null);
       setPendingAmendConfirmation(true);
     } catch (cause) {
       if (amendPreviewRequest.current === requestId) setAmendPreviewError(errorMessage(cause));
@@ -734,11 +871,6 @@ export function WorkspaceView({
     try {
       let preview = await desktopApi.repository.previewAmendCommit(repositoryPath);
       if (amendPreviewRequest.current !== requestId) return;
-      if (!preview.canAmend) {
-        setAmendPreview(preview);
-        setAmendPreviewError("当前 HEAD 已被本地已知的远端引用或标签引用，不能安全修改。");
-        return;
-      }
       if (intent === "submit" && groups.staged.length === 0 && groups.unstaged.length > 0) {
         const staged = await desktopApi.repository.stageAll(repositoryPath);
         if (amendPreviewRequest.current !== requestId) return;
@@ -747,15 +879,23 @@ export function WorkspaceView({
         if (amendPreviewRequest.current !== requestId) return;
       }
       setAmendPreview(preview);
+      setAmendPushPreview(null);
       if (intent === "edit-message" || !currentDraft.trim()) {
         setCommitMessage(joinCommitMessage(preview.currentSubject, preview.currentBody));
       }
-      if (intent === "submit") {
-        if (!preview.canAmend) {
-          setAmendPreviewError("当前 HEAD 已被本地已知的远端引用或标签引用，不能安全修改。");
-          return;
+      if (preview.canAmend) {
+        if (intent === "submit") setPendingAmendConfirmation(true);
+      } else {
+        try {
+          const safePush = await desktopApi.repository.previewAmendAndPush(repositoryPath);
+          if (amendPreviewRequest.current !== requestId) return;
+          setAmendPushPreview(safePush);
+          if (intent === "submit") setPendingAmendPushConfirmation(true);
+        } catch (cause) {
+          if (amendPreviewRequest.current === requestId) {
+            setAmendPreviewError(errorMessage(cause));
+          }
         }
-        setPendingAmendConfirmation(true);
       }
     } catch (cause) {
       if (amendPreviewRequest.current === requestId) {
@@ -773,9 +913,11 @@ export function WorkspaceView({
   function cancelAmend() {
     ++amendPreviewRequest.current;
     setAmendPreview(null);
+    setAmendPushPreview(null);
     setLoadingAmendPreview(false);
     setAmendPreviewError(null);
     setPendingAmendConfirmation(false);
+    setPendingAmendPushConfirmation(false);
     setCommitMessage("");
   }
 
@@ -814,6 +956,53 @@ export function WorkspaceView({
       setPendingAmendConfirmation(false);
       onError(errorMessage(cause));
       await onRefresh();
+    } finally {
+      if (activeRepositoryPath.current === repositoryPath) setBusyAction(null);
+    }
+  }
+
+  async function confirmAmendAndPush() {
+    if (!amendPushPreview || !pendingAmendPushConfirmation || mutationBlocked()) return;
+    const repositoryPath = project.path;
+    const requestId = amendPreviewRequest.current;
+    const { subject, body } = splitCommitMessage(commitMessage);
+    if (!subject) return;
+    setBusyAction("amend-push");
+    setNotice(null);
+    try {
+      const started = await desktopApi.repository.amendAndPush(repositoryPath, {
+        subject,
+        body,
+        expectedToken: amendPushPreview.token,
+      });
+      if (
+        activeRepositoryPath.current !== repositoryPath ||
+        amendPreviewRequest.current !== requestId
+      )
+        return;
+      setPendingAmendPushConfirmation(false);
+      setAmendPushOperationId(started.operationId);
+      onOperationStarted({
+        operationId: started.operationId,
+        repositoryPath,
+        kind: "amend_push",
+        state: "queued",
+        phase: "queued",
+        percent: null,
+        message: `正在等待修改提交并安全强推到 ${amendPushPreview.remoteName}/${amendPushPreview.remoteBranchName}`,
+        remoteTagDeletePreview: null,
+      });
+      setNotice(
+        `正在修改提交并安全强推到 ${amendPushPreview.remoteName}/${amendPushPreview.remoteBranchName}`,
+      );
+    } catch (cause) {
+      if (
+        activeRepositoryPath.current === repositoryPath &&
+        amendPreviewRequest.current === requestId
+      ) {
+        setPendingAmendPushConfirmation(false);
+        setAmendPreviewError(errorMessage(cause));
+      }
     } finally {
       if (activeRepositoryPath.current === repositoryPath) setBusyAction(null);
     }
@@ -949,14 +1138,16 @@ export function WorkspaceView({
     mergeRecovery !== null ||
     groups.conflicted.length > 0 ||
     !commitSubject ||
-    !amendPreview?.canAmend;
-  const remoteCommitDisabled = commitDisabled || !status?.branch.upstream;
+    (!amendPreview?.canAmend && !amendPushPreview);
+  const syncCommitDisabled = commitDisabled || !status?.branch.upstream;
+  const pushDisabled =
+    busy || mergeRecovery !== null || groups.conflicted.length > 0 || !status?.branch.oid;
   const amendDisabled =
     busy || mergeRecovery !== null || groups.conflicted.length > 0 || !status?.branch.oid;
   const amendSubmitDisabled = amendDisabled;
   const undoDisabled =
     busy || mergeRecovery !== null || !status?.branch.oid || (status?.changes.length ?? 0) > 0;
-  const commitMenuDisabled = commitDisabled && amendDisabled && undoDisabled;
+  const commitMenuDisabled = commitDisabled && pushDisabled && amendDisabled && undoDisabled;
 
   function handleCommitMessageKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (
@@ -1101,7 +1292,7 @@ export function WorkspaceView({
                 </dl>
                 {amendPreview.blockingRefs.length > 0 ? (
                   <div className="amend-blocking-refs">
-                    <strong>检测到阻止修改的引用</strong>
+                    <strong>本地 Amend 被以下引用阻止</strong>
                     {amendPreview.blockingRefs.map((reference) => (
                       <code key={reference}>{reference}</code>
                     ))}
@@ -1112,6 +1303,16 @@ export function WorkspaceView({
                     个暂存文件时只修改提交信息。
                   </p>
                 )}
+                {amendPushPreview ? (
+                  <p className="operation-notice">
+                    可通过精确 force-with-lease 仅更新
+                    <strong>
+                      {" "}
+                      {amendPushPreview.remoteName}/{amendPushPreview.remoteBranchName}
+                    </strong>
+                    ；远端 OID 变化时操作会停止。
+                  </p>
+                ) : null}
                 <p>
                   Amend 会重写 commit OID；不会执行 commit
                   hooks、编辑器或本次提交签名。未暂存与未跟踪内容不会进入新提交。
@@ -1144,9 +1345,11 @@ export function WorkspaceView({
                   : busyAction === "preview-amend"
                     ? "重新校验中…"
                     : amendPreview
-                      ? amendPreview.stagedChangeCount === 0
-                        ? "预览并修改提交信息"
-                        : `预览并修改提交（${groups.staged.length} 个暂存文件）`
+                      ? amendPushPreview
+                        ? "修改提交并安全强推…"
+                        : amendPreview.stagedChangeCount === 0
+                          ? "预览并修改提交信息"
+                          : `预览并修改提交（${groups.staged.length} 个暂存文件）`
                       : "提交"}
               </button>
               {!amendPreview ? (
@@ -1208,24 +1411,23 @@ export function WorkspaceView({
                       void beginAmend("submit");
                     }}
                   >
-                    提交(修改)
+                    提交(修改)…
                   </button>
                   <button
                     type="button"
                     role="menuitem"
-                    disabled={remoteCommitDisabled}
-                    title={!status?.branch.upstream ? "当前分支没有远端上游" : undefined}
+                    disabled={commitDisabled}
                     onClick={() => {
                       setCommitMenuOpen(false);
-                      void createNewCommit("push");
+                      void openPushTarget(true);
                     }}
                   >
-                    提交和推送
+                    提交和推送…
                   </button>
                   <button
                     type="button"
                     role="menuitem"
-                    disabled={remoteCommitDisabled}
+                    disabled={syncCommitDisabled}
                     title={!status?.branch.upstream ? "当前分支没有远端上游" : undefined}
                     onClick={() => {
                       setCommitMenuOpen(false);
@@ -1233,6 +1435,17 @@ export function WorkspaceView({
                     }}
                   >
                     提交和同步
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={pushDisabled}
+                    onClick={() => {
+                      setCommitMenuOpen(false);
+                      void openPushTarget(false);
+                    }}
+                  >
+                    推送…
                   </button>
                   <div className="commit-menu-separator" role="separator" />
                   <button
@@ -1244,7 +1457,7 @@ export function WorkspaceView({
                       void beginAmend("edit-message");
                     }}
                   >
-                    修改上次提交信息
+                    修改上次提交信息…
                   </button>
                   <button
                     type="button"
@@ -1255,7 +1468,7 @@ export function WorkspaceView({
                       void beginUndoLastCommit("soft");
                     }}
                   >
-                    撤销上次提交，保留更改
+                    撤销上次提交，保留更改…
                   </button>
                   <button
                     type="button"
@@ -1266,7 +1479,7 @@ export function WorkspaceView({
                       void beginUndoLastCommit("mixed");
                     }}
                   >
-                    撤销上次提交，取消暂存
+                    撤销上次提交，取消暂存…
                   </button>
                 </div>,
                 document.body,
@@ -1581,6 +1794,26 @@ export function WorkspaceView({
         </Dialog>
       ) : null}
 
+      {pendingPushTarget ? (
+        <PushBranchTargetDialog
+          branch={pendingPushTarget.branch}
+          commitBeforePush={pendingPushTarget.commitBeforePush}
+          refs={pendingPushTarget.refs}
+          busy={busy}
+          error={pushTargetError}
+          returnFocusElement={commitMenuButtonRef.current}
+          onClose={() => {
+            setPendingPushTarget(null);
+            setPushTargetError(null);
+          }}
+          onPush={(input) =>
+            pendingPushTarget.commitBeforePush
+              ? void createNewCommit("push-target", input)
+              : void pushSelectedTarget(input)
+          }
+        />
+      ) : null}
+
       {pendingAmendConfirmation && amendPreview ? (
         <Dialog
           open
@@ -1637,6 +1870,70 @@ export function WorkspaceView({
               onClick={() => void confirmAmend()}
             >
               {busyAction === "amend" ? "修改中…" : "确认修改提交"}
+            </button>
+          </div>
+        </Dialog>
+      ) : null}
+
+      {pendingAmendPushConfirmation && amendPushPreview ? (
+        <Dialog
+          open
+          className="confirmation-dialog amend-dialog"
+          role="alertdialog"
+          ariaLabelledBy="amend-push-dialog-title"
+          ariaDescribedBy="amend-push-dialog-description"
+          busy={busy}
+          onClose={() => setPendingAmendPushConfirmation(false)}
+        >
+          <p className="eyebrow danger">REMOTE HISTORY REWRITE</p>
+          <h2 id="amend-push-dialog-title">确认修改提交并安全强推</h2>
+          <p id="amend-push-dialog-description">
+            当前 HEAD 会被新 commit 替换，并且只会强制更新下方远端上游。推送使用精确
+            force-with-lease；只要服务器 OID 不再等于当前旧 HEAD，就会拒绝覆盖。
+          </p>
+          <dl className="merge-preview-grid">
+            <div>
+              <dt>当前分支</dt>
+              <dd>{amendPushPreview.currentBranch}</dd>
+            </div>
+            <div>
+              <dt>唯一远端目标</dt>
+              <dd>
+                {amendPushPreview.remoteName}/{amendPushPreview.remoteBranchName}
+              </dd>
+            </div>
+            <div>
+              <dt>预期远端 OID</dt>
+              <dd title={amendPushPreview.expectedRemoteOid}>
+                {shortOid(amendPushPreview.expectedRemoteOid)}
+              </dd>
+            </div>
+            <div>
+              <dt>暂存文件</dt>
+              <dd>{amendPushPreview.stagedChangeCount}</dd>
+            </div>
+          </dl>
+          <p className="amend-dialog-note">
+            该操作不会开放任意强推。若本地 Amend 成功后网络、权限或分支保护导致 Push
+            失败，本地分支会保留修改后的提交，应用会明确报告这一部分成功状态。
+          </p>
+          <div className="confirmation-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={busy}
+              autoFocus
+              onClick={() => setPendingAmendPushConfirmation(false)}
+            >
+              取消
+            </button>
+            <button
+              className="danger-button"
+              type="button"
+              disabled={busy}
+              onClick={() => void confirmAmendAndPush()}
+            >
+              {busyAction === "amend-push" ? "启动中…" : "确认修改并安全强推"}
             </button>
           </div>
         </Dialog>

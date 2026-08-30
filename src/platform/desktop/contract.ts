@@ -152,10 +152,25 @@ export interface RepositoryApi {
   fetch(path: string, remoteName: string): Promise<Domain.GitOperationStarted>;
   pull(path: string): Promise<Domain.GitOperationStarted>;
   push(path: string): Promise<Domain.GitOperationStarted>;
+  publishBranch(
+    path: string,
+    input: Domain.PublishBranchInput,
+  ): Promise<Domain.GitOperationStarted>;
+  pushBranchTarget(
+    path: string,
+    input: Domain.PushBranchTargetInput,
+  ): Promise<Domain.GitOperationStarted>;
   sync(path: string): Promise<Domain.GitOperationStarted>;
   createCommit(path: string, input: Domain.CommitInput): Promise<Domain.CommitCreated>;
+  previewAmendAndPush(path: string): Promise<Domain.AmendAndPushPreview>;
+  amendAndPush(path: string, input: Domain.AmendAndPushInput): Promise<Domain.GitOperationStarted>;
   previewAmendCommit(path: string): Promise<Domain.AmendCommitPreview>;
   amendCommit(path: string, input: Domain.AmendCommitInput): Promise<Domain.AmendCommitCreated>;
+  watchWorkspace(path: string): Promise<void>;
+  unwatchWorkspace(): Promise<void>;
+  subscribeWorkspaceChanges(
+    listener: (event: Domain.WorkspaceChangedEvent) => void,
+  ): Promise<() => void>;
 }
 
 export interface GitOperationsApi {

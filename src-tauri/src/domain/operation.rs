@@ -7,6 +7,7 @@ pub const GIT_OPERATION_EVENT: &str = "git-operation://status";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GitOperationKind {
+    AmendPush,
     Fetch,
     Pull,
     Push,

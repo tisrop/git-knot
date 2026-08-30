@@ -515,6 +515,118 @@ describe("web mock push operation", () => {
   });
 });
 
+describe("web mock branch publishing", () => {
+  let publishBridge: DesktopApi;
+  const path = "/Users/demo/projects/git-knot";
+
+  beforeEach(async () => {
+    vi.resetModules();
+    publishBridge = (await import("./webMockBridge")).webMockBridge;
+  });
+
+  it("创建远端分支并设置为当前分支上游", async () => {
+    vi.useFakeTimers();
+    await publishBridge.repository.createBranch(path, "feature/local-only");
+    const before = await publishBridge.repository.refs(path);
+    const current = before.branches.find((branch) => branch.current && branch.kind === "local")!;
+    expect(current.upstream).toBeNull();
+
+    const started = await publishBridge.repository.publishBranch(path, {
+      localFullName: current.fullName,
+      remoteName: "origin",
+      remoteBranchName: "feature/published",
+      expectedLocalOid: current.oid,
+    });
+    expect(started.operationId).toContain("mock-publish");
+    await vi.advanceTimersByTimeAsync(500);
+
+    const after = await publishBridge.repository.refs(path);
+    const publishedLocal = after.branches.find(
+      (branch) => branch.current && branch.kind === "local",
+    );
+    expect(publishedLocal?.upstream).toBe("origin/feature/published");
+    expect(after.branches).toContainEqual(
+      expect.objectContaining({
+        kind: "remote",
+        name: "origin/feature/published",
+        oid: current.oid,
+      }),
+    );
+  });
+
+  it("拒绝覆盖已存在的远端分支", async () => {
+    vi.useFakeTimers();
+    await publishBridge.repository.createBranch(path, "feature/first-local");
+    let refs = await publishBridge.repository.refs(path);
+    let current = refs.branches.find((branch) => branch.current && branch.kind === "local")!;
+    await publishBridge.repository.publishBranch(path, {
+      localFullName: current.fullName,
+      remoteName: "origin",
+      remoteBranchName: "feature/published",
+      expectedLocalOid: current.oid,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+
+    await publishBridge.repository.createBranch(path, "feature/second-local");
+    refs = await publishBridge.repository.refs(path);
+    current = refs.branches.find((branch) => branch.current && branch.kind === "local")!;
+    await expect(
+      publishBridge.repository.publishBranch(path, {
+        localFullName: current.fullName,
+        remoteName: "origin",
+        remoteBranchName: "feature/published",
+        expectedLocalOid: current.oid,
+      }),
+    ).rejects.toThrow("远端分支已经存在");
+  });
+});
+
+describe("web mock selected branch push", () => {
+  let pushBridge: DesktopApi;
+  const path = "/Users/demo/projects/git-knot";
+
+  beforeEach(async () => {
+    vi.resetModules();
+    pushBridge = (await import("./webMockBridge")).webMockBridge;
+  });
+
+  it("推送到所选现有远端分支并设置上游", async () => {
+    vi.useFakeTimers();
+    const refs = await pushBridge.repository.refs(path);
+    const current = refs.branches.find((branch) => branch.current && branch.kind === "local")!;
+    const target = refs.branches.find(
+      (branch) => branch.kind === "remote" && branch.name === "origin/main",
+    )!;
+
+    const started = await pushBridge.repository.pushBranchTarget(path, {
+      localFullName: current.fullName,
+      remoteName: "origin",
+      remoteBranchName: "main",
+      expectedLocalOid: current.oid,
+      expectedRemoteOid: target.oid,
+    });
+    expect(started.operationId).toContain("mock-push-target");
+    await vi.advanceTimersByTimeAsync(500);
+
+    const after = await pushBridge.repository.refs(path);
+    expect(after.branches.find((branch) => branch.current)?.upstream).toBe("origin/main");
+  });
+
+  it("新建目标拒绝覆盖同名远端分支", async () => {
+    const refs = await pushBridge.repository.refs(path);
+    const current = refs.branches.find((branch) => branch.current && branch.kind === "local")!;
+    await expect(
+      pushBridge.repository.pushBranchTarget(path, {
+        localFullName: current.fullName,
+        remoteName: "origin",
+        remoteBranchName: "main",
+        expectedLocalOid: current.oid,
+        expectedRemoteOid: null,
+      }),
+    ).rejects.toThrow("目标远端分支已经存在");
+  });
+});
+
 describe("web mock sync operation", () => {
   it("按 Pull 后 Push 的顺序发送同步生命周期", async () => {
     vi.useFakeTimers();
@@ -1234,6 +1346,49 @@ describe("web mock safe amend", () => {
     expect((await amendBridge.repository.commit(path, result.commit.oid)).body).toBe(
       "Include the staged history view update.",
     );
+  });
+
+  it("已发布 HEAD 只允许修改提交并安全强推到精确上游", async () => {
+    vi.useFakeTimers();
+    const pushed = await amendBridge.repository.push(path);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await amendBridge.gitOperations.cancel(pushed.operationId)).toBe(false);
+
+    const localPreview = await amendBridge.repository.previewAmendCommit(path);
+    expect(localPreview.canAmend).toBe(false);
+    const preview = await amendBridge.repository.previewAmendAndPush(path);
+    expect(preview).toMatchObject({
+      remoteName: "origin",
+      remoteBranchName: "main",
+      expectedRemoteOid: localPreview.headOid,
+    });
+
+    const events: GitOperationEvent[] = [];
+    const unsubscribe = await amendBridge.gitOperations.subscribe((event) => events.push(event));
+    const started = await amendBridge.repository.amendAndPush(path, {
+      subject: "feat: amend published HEAD",
+      body: "Guarded by an exact lease.",
+      expectedToken: preview.token,
+    });
+    expect(events.at(-1)).toMatchObject({
+      operationId: started.operationId,
+      kind: "amend_push",
+      state: "queued",
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(events.at(-1)).toMatchObject({
+      operationId: started.operationId,
+      kind: "amend_push",
+      state: "succeeded",
+    });
+    const refs = await amendBridge.repository.refs(path);
+    const current = refs.branches.find((branch) => branch.current)!;
+    const upstream = refs.branches.find(
+      (branch) => branch.kind === "remote" && branch.name === current.upstream,
+    )!;
+    expect(current.oid).not.toBe(preview.headOid);
+    expect(upstream.oid).toBe(current.oid);
+    unsubscribe();
   });
 
   it("允许没有暂存内容时只修改提交信息", async () => {
