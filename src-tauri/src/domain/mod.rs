@@ -36,9 +36,10 @@ pub use tag::{
 };
 pub use update::{UpdateCheckResult, UpdateProgressEvent, UPDATE_PROGRESS_EVENT};
 pub use workspace::{
-    AmendCommitCreated, AmendCommitInput, AmendCommitPreview, CommitCreated, CommitInput,
-    ConflictDetails, ConflictResolutionChoice, ConflictResolutionInput, ConflictSide,
-    MergeRecoveryInput, MergeRecoveryPreview, RepositoryMutationResult, WorktreeDiff,
+    AmendAndPushInput, AmendAndPushPreview, AmendCommitCreated, AmendCommitInput,
+    AmendCommitPreview, CommitCreated, CommitInput, ConflictDetails, ConflictResolutionChoice,
+    ConflictResolutionInput, ConflictSide, MergeRecoveryInput, MergeRecoveryPreview,
+    RepositoryMutationResult, WorktreeDiff,
 };
 pub use worktree::{
     RepositoryWorktrees, WorktreeCreateCandidate, WorktreeCreateInput, WorktreeInfo,

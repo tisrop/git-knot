@@ -162,6 +162,8 @@ export interface RepositoryApi {
   ): Promise<Domain.GitOperationStarted>;
   sync(path: string): Promise<Domain.GitOperationStarted>;
   createCommit(path: string, input: Domain.CommitInput): Promise<Domain.CommitCreated>;
+  previewAmendAndPush(path: string): Promise<Domain.AmendAndPushPreview>;
+  amendAndPush(path: string, input: Domain.AmendAndPushInput): Promise<Domain.GitOperationStarted>;
   previewAmendCommit(path: string): Promise<Domain.AmendCommitPreview>;
   amendCommit(path: string, input: Domain.AmendCommitInput): Promise<Domain.AmendCommitCreated>;
 }

@@ -1041,6 +1041,20 @@ textarea::placeholder {
   background: var(--accent-soft);
 }
 
+:root[data-theme="light"] .confirmation-dialog .merge-preview-grid > div,
+:root[data-theme="dark"] .confirmation-dialog .merge-preview-grid > div {
+  border-color: var(--border);
+  color: var(--text-1);
+  background: var(--surface-2);
+}
+
+:root[data-theme="light"] .confirmation-dialog .amend-dialog-note,
+:root[data-theme="dark"] .confirmation-dialog .amend-dialog-note {
+  border-color: var(--border);
+  color: var(--text-2);
+  background: var(--warning-soft);
+}
+
 .history-ref-chip.remote,
 .submodule-state.modified {
   color: var(--info);

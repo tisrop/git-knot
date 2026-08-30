@@ -1,16 +1,16 @@
 use crate::domain::{
-    AmendCommitCreated, AmendCommitInput, AmendCommitPreview, BranchCreateAtCommitInput,
-    BranchInfo, BranchKind, BranchStatus, ChangeKind, CherryPickCommitInput,
-    CherryPickCommitPreview, CloneOperationStarted, CommitCreated, CommitDetails, CommitFileChange,
-    CommitInput, CommitSummary, ConflictDetails, ConflictResolutionChoice, ConflictResolutionInput,
-    ConflictSide, FileChange, GitOperationEvent, GitOperationKind, GitOperationStarted,
-    GitOperationState, GitVersion, HistoryPage, HistoryQuery, ImageDiff, ImagePreview,
-    LocalMergeMode, LocalMergePreview, LocalMergeStrategy, MergeRecoveryInput,
-    MergeRecoveryPreview, Project, ProjectMetadataUpdateInput, PublishBranchInput,
-    PushBranchTargetInput, RemoteCreateInput, RemoteDeleteInput, RemoteDeletePreview,
-    RemoteEditPreview, RemoteInfo, RemoteTagDeleteInput, RemoteTagDeletePreview,
-    RemoteTagDeletePreviewInput, RemoteTagPushInput, RemoteUpdateInput, RepositoryMutationResult,
-    RepositoryRefs, RepositoryRefsMutationResult, RepositoryStashes,
+    AmendAndPushInput, AmendAndPushPreview, AmendCommitCreated, AmendCommitInput,
+    AmendCommitPreview, BranchCreateAtCommitInput, BranchInfo, BranchKind, BranchStatus,
+    ChangeKind, CherryPickCommitInput, CherryPickCommitPreview, CloneOperationStarted,
+    CommitCreated, CommitDetails, CommitFileChange, CommitInput, CommitSummary, ConflictDetails,
+    ConflictResolutionChoice, ConflictResolutionInput, ConflictSide, FileChange, GitOperationEvent,
+    GitOperationKind, GitOperationStarted, GitOperationState, GitVersion, HistoryPage,
+    HistoryQuery, ImageDiff, ImagePreview, LocalMergeMode, LocalMergePreview, LocalMergeStrategy,
+    MergeRecoveryInput, MergeRecoveryPreview, Project, ProjectMetadataUpdateInput,
+    PublishBranchInput, PushBranchTargetInput, RemoteCreateInput, RemoteDeleteInput,
+    RemoteDeletePreview, RemoteEditPreview, RemoteInfo, RemoteTagDeleteInput,
+    RemoteTagDeletePreview, RemoteTagDeletePreviewInput, RemoteTagPushInput, RemoteUpdateInput,
+    RepositoryMutationResult, RepositoryRefs, RepositoryRefsMutationResult, RepositoryStashes,
     RepositoryStashesMutationResult, RepositoryStatus, RepositorySubmodules, RepositoryTags,
     RepositoryTagsMutationResult, RepositoryWorktrees, ResetCommitInput, ResetCommitMode,
     ResetCommitPreview, RevertCommitInput, RevertCommitPreview, StashCreateInput, StashInfo,
@@ -40,6 +40,8 @@ fn generated_bindings() -> String {
 
     // Keep this list alphabetical. TypeScript declarations may reference types
     // declared later in the same module, so dependency order is unnecessary.
+    declare!(AmendAndPushInput);
+    declare!(AmendAndPushPreview);
     declare!(AmendCommitCreated);
     declare!(AmendCommitInput);
     declare!(AmendCommitPreview);

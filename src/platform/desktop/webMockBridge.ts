@@ -1,4 +1,5 @@
 import type {
+  AmendAndPushPreview,
   AmendCommitPreview,
   BranchInfo,
   CherryPickCommitPreview,
@@ -1351,6 +1352,77 @@ function previewMockAmend(path: string): AmendCommitPreview {
     blockingRefs,
     canAmend: blockingRefs.length === 0,
     token: mockAmendToken(branch, commit, blockingRefs),
+  };
+}
+
+function previewMockAmendAndPush(path: string): AmendAndPushPreview {
+  const preview = previewMockAmend(path);
+  const branch = mockBranches.find((candidate) => candidate.current && candidate.kind === "local")!;
+  if (!branch.upstream || branch.upstreamMissing) {
+    throw mockError("amend_push_no_upstream", "当前分支没有可用的远端上游");
+  }
+  const remoteTracking = mockBranches.find(
+    (candidate) => candidate.kind === "remote" && candidate.name === branch.upstream,
+  );
+  if (!remoteTracking || remoteTracking.oid !== preview.headOid) {
+    throw mockError(
+      "amend_push_upstream_mismatch",
+      "当前上游并未精确指向待修改的 HEAD，安全强推已停止",
+    );
+  }
+  if (preview.blockingRefs.length !== 1 || preview.blockingRefs[0] !== remoteTracking.fullName) {
+    throw mockError(
+      "amend_push_other_refs",
+      "除当前上游外仍有远端引用或标签包含该 HEAD，安全强推已停止",
+    );
+  }
+  const [remoteName, ...remoteBranchParts] = branch.upstream.split("/");
+  const remoteBranchName = remoteBranchParts.join("/");
+  return {
+    currentBranch: preview.currentBranch,
+    headOid: preview.headOid,
+    currentSubject: preview.currentSubject,
+    currentBody: preview.currentBody,
+    stagedChangeCount: preview.stagedChangeCount,
+    remoteName,
+    remoteBranchName,
+    remoteFullName: `refs/heads/${remoteBranchName}`,
+    expectedRemoteOid: preview.headOid,
+    token: `${preview.token.slice(0, -1)}1`,
+  };
+}
+
+function applyMockAmendCommit(
+  path: string,
+  preview: Pick<AmendCommitPreview, "headOid">,
+  subject: string,
+  body: string,
+) {
+  const normalizedSubject = subject.trim();
+  if (!normalizedSubject) throw mockError("invalid_commit_message", "提交标题不能为空");
+  const previous = mockCommits.find((commit) => commit.oid === preview.headOid)!;
+  const stagedPaths = fileChangesForCommit().flatMap(
+    (file) => [file.originalPath, file.path].filter(Boolean) as string[],
+  );
+  const oid = (++mockAmendSequence).toString(16).padStart(40, "0");
+  const commit: CommitSummary = {
+    ...previous,
+    oid,
+    subject: normalizedSubject,
+  };
+  mockCommitPaths.set(oid, [
+    ...new Set([...(mockCommitPaths.get(previous.oid) ?? []), ...stagedPaths]),
+  ]);
+  mockCommitBodies.set(oid, body.trim());
+  mockCommits = [commit, ...mockCommits.filter((candidate) => candidate.oid !== previous.oid)];
+  mockBranches = mockBranches.map((branch) => (branch.current ? { ...branch, oid } : branch));
+  mockChanges = mockChanges
+    .filter((change) => !change.indexStatus || Boolean(change.worktreeStatus))
+    .map((change) => ({ ...change, indexStatus: null }));
+  return {
+    previousOid: previous.oid,
+    commit,
+    status: cloneStatus(path),
   };
 }
 
@@ -2977,6 +3049,105 @@ export const webMockBridge: DesktopApi = {
         .map((change) => ({ ...change, indexStatus: null }));
       return { commit, status: cloneStatus(path) };
     },
+    async previewAmendAndPush(path) {
+      return previewMockAmendAndPush(path);
+    },
+    async amendAndPush(path, input) {
+      const preview = previewMockAmendAndPush(path);
+      if (input.expectedToken !== preview.token) {
+        throw mockError(
+          "amend_push_snapshot_changed",
+          "HEAD、当前分支、暂存内容或远端上游配置已变化，请重新预览",
+        );
+      }
+      const operationId = `mock-amend-push-${++mockOperationSequence}`;
+      mockOperationMeta.set(operationId, {
+        repositoryPath: path,
+        kind: "amend_push",
+        cancelMessage: "已取消修改提交并安全强推",
+      });
+      emitMockOperation({
+        operationId,
+        repositoryPath: path,
+        kind: "amend_push",
+        state: "queued",
+        phase: "queued",
+        percent: null,
+        message: "正在等待修改提交并安全强推",
+      });
+      scheduleMockOperation(
+        operationId,
+        () => {
+          emitMockOperation({
+            operationId,
+            repositoryPath: path,
+            kind: "amend_push",
+            state: "running",
+            phase: "verifying",
+            percent: null,
+            message: "正在校验 HEAD、暂存区与远端上游",
+          });
+        },
+        20,
+      );
+      scheduleMockOperation(
+        operationId,
+        () => {
+          const verified = previewMockAmendAndPush(path);
+          if (verified.token !== input.expectedToken) {
+            emitMockOperation({
+              operationId,
+              repositoryPath: path,
+              kind: "amend_push",
+              state: "failed",
+              phase: "completed",
+              percent: null,
+              message: "HEAD、暂存内容或远端上游已变化，操作已停止",
+            });
+            finishMockOperation(operationId);
+            return;
+          }
+          const result = applyMockAmendCommit(path, preview, input.subject, input.body);
+          emitMockOperation({
+            operationId,
+            repositoryPath: path,
+            kind: "amend_push",
+            state: "progress",
+            phase: "pushing",
+            percent: 68,
+            message: `正在安全强推修改后的提交到 ${preview.remoteName}/${preview.remoteBranchName}`,
+          });
+          scheduleMockOperation(
+            operationId,
+            () => {
+              mockBranches = mockBranches.map((branch) => {
+                if (branch.current) return { ...branch, ahead: 0 };
+                if (
+                  branch.fullName ===
+                  `refs/remotes/${preview.remoteName}/${preview.remoteBranchName}`
+                ) {
+                  return { ...branch, oid: result.commit.oid };
+                }
+                return branch;
+              });
+              emitMockOperation({
+                operationId,
+                repositoryPath: path,
+                kind: "amend_push",
+                state: "succeeded",
+                phase: "completed",
+                percent: 100,
+                message: "已修改当前提交并通过精确 force-with-lease 更新远端上游",
+              });
+              finishMockOperation(operationId);
+            },
+            240,
+          );
+        },
+        180,
+      );
+      return { operationId };
+    },
     async previewAmendCommit(path) {
       return previewMockAmend(path);
     },
@@ -2994,32 +3165,7 @@ export const webMockBridge: DesktopApi = {
           "当前 HEAD 已被本地已知的远端引用或标签引用，安全修改已停止",
         );
       }
-      const subject = input.subject.trim();
-      if (!subject) throw mockError("invalid_commit_message", "提交标题不能为空");
-      const previous = mockCommits.find((commit) => commit.oid === preview.headOid)!;
-      const stagedPaths = fileChangesForCommit().flatMap(
-        (file) => [file.originalPath, file.path].filter(Boolean) as string[],
-      );
-      const oid = (++mockAmendSequence).toString(16).padStart(40, "0");
-      const commit: CommitSummary = {
-        ...previous,
-        oid,
-        subject,
-      };
-      mockCommitPaths.set(oid, [
-        ...new Set([...(mockCommitPaths.get(previous.oid) ?? []), ...stagedPaths]),
-      ]);
-      mockCommitBodies.set(oid, input.body.trim());
-      mockCommits = [commit, ...mockCommits.filter((candidate) => candidate.oid !== previous.oid)];
-      mockBranches = mockBranches.map((branch) => (branch.current ? { ...branch, oid } : branch));
-      mockChanges = mockChanges
-        .filter((change) => !change.indexStatus || Boolean(change.worktreeStatus))
-        .map((change) => ({ ...change, indexStatus: null }));
-      return {
-        previousOid: previous.oid,
-        commit,
-        status: cloneStatus(path),
-      };
+      return applyMockAmendCommit(path, preview, input.subject, input.body);
     },
   },
   gitOperations: {

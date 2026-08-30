@@ -1,16 +1,16 @@
 use crate::domain::{
-    AmendCommitCreated, AmendCommitInput, AmendCommitPreview, BranchCreateAtCommitInput,
-    CherryPickCommitInput, CherryPickCommitPreview, CommitCreated, CommitDetails, CommitInput,
-    ConflictDetails, ConflictResolutionInput, HistoryPage, HistoryQuery, LocalMergePreview,
-    LocalMergeStrategy, MergeRecoveryInput, MergeRecoveryPreview, PublishBranchInput,
-    PushBranchTargetInput, RemoteCreateInput, RemoteDeleteInput, RemoteDeletePreview,
-    RemoteEditPreview, RemoteTagDeleteInput, RemoteTagDeletePreview, RemoteTagDeletePreviewInput,
-    RemoteTagPushInput, RemoteUpdateInput, RepositoryMutationResult, RepositoryRefs,
-    RepositoryRefsMutationResult, RepositoryStashes, RepositoryStashesMutationResult,
-    RepositoryStatus, RepositorySubmodules, RepositoryTags, RepositoryTagsMutationResult,
-    RepositoryWorktrees, ResetCommitInput, ResetCommitMode, ResetCommitPreview, RevertCommitInput,
-    RevertCommitPreview, StashCreateInput, WorktreeCreateInput, WorktreeDiff, WorktreeLockInput,
-    WorktreePruneInput, WorktreeUnlockInput,
+    AmendAndPushInput, AmendAndPushPreview, AmendCommitCreated, AmendCommitInput,
+    AmendCommitPreview, BranchCreateAtCommitInput, CherryPickCommitInput, CherryPickCommitPreview,
+    CommitCreated, CommitDetails, CommitInput, ConflictDetails, ConflictResolutionInput,
+    HistoryPage, HistoryQuery, LocalMergePreview, LocalMergeStrategy, MergeRecoveryInput,
+    MergeRecoveryPreview, PublishBranchInput, PushBranchTargetInput, RemoteCreateInput,
+    RemoteDeleteInput, RemoteDeletePreview, RemoteEditPreview, RemoteTagDeleteInput,
+    RemoteTagDeletePreview, RemoteTagDeletePreviewInput, RemoteTagPushInput, RemoteUpdateInput,
+    RepositoryMutationResult, RepositoryRefs, RepositoryRefsMutationResult, RepositoryStashes,
+    RepositoryStashesMutationResult, RepositoryStatus, RepositorySubmodules, RepositoryTags,
+    RepositoryTagsMutationResult, RepositoryWorktrees, ResetCommitInput, ResetCommitMode,
+    ResetCommitPreview, RevertCommitInput, RevertCommitPreview, StashCreateInput,
+    WorktreeCreateInput, WorktreeDiff, WorktreeLockInput, WorktreePruneInput, WorktreeUnlockInput,
 };
 use crate::error::CommandError;
 use crate::infrastructure::git;
@@ -705,6 +705,30 @@ impl RepositoryService {
 
     pub fn preview_amend_commit(&self, path: &Path) -> Result<AmendCommitPreview, CommandError> {
         git::preview_amend_commit(path, &self.amend_commit_token_namespace)
+    }
+
+    pub fn preview_amend_and_push(&self, path: &Path) -> Result<AmendAndPushPreview, CommandError> {
+        git::preview_amend_and_push(path, &self.amend_commit_token_namespace)
+    }
+
+    pub fn amend_and_push(
+        &self,
+        path: &Path,
+        input: &AmendAndPushInput,
+        cancellation: Arc<AtomicBool>,
+        started: Arc<dyn Fn() + Send + Sync>,
+        progress: Arc<dyn Fn(git::FetchProgress) + Send + Sync>,
+    ) -> Result<(), CommandError> {
+        self.with_write(path, |root| {
+            started();
+            git::amend_and_push(
+                root,
+                input,
+                &self.amend_commit_token_namespace,
+                cancellation,
+                progress,
+            )
+        })
     }
 
     pub fn amend_commit(

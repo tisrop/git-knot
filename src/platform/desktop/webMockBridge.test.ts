@@ -1348,6 +1348,49 @@ describe("web mock safe amend", () => {
     );
   });
 
+  it("已发布 HEAD 只允许修改提交并安全强推到精确上游", async () => {
+    vi.useFakeTimers();
+    const pushed = await amendBridge.repository.push(path);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await amendBridge.gitOperations.cancel(pushed.operationId)).toBe(false);
+
+    const localPreview = await amendBridge.repository.previewAmendCommit(path);
+    expect(localPreview.canAmend).toBe(false);
+    const preview = await amendBridge.repository.previewAmendAndPush(path);
+    expect(preview).toMatchObject({
+      remoteName: "origin",
+      remoteBranchName: "main",
+      expectedRemoteOid: localPreview.headOid,
+    });
+
+    const events: GitOperationEvent[] = [];
+    const unsubscribe = await amendBridge.gitOperations.subscribe((event) => events.push(event));
+    const started = await amendBridge.repository.amendAndPush(path, {
+      subject: "feat: amend published HEAD",
+      body: "Guarded by an exact lease.",
+      expectedToken: preview.token,
+    });
+    expect(events.at(-1)).toMatchObject({
+      operationId: started.operationId,
+      kind: "amend_push",
+      state: "queued",
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(events.at(-1)).toMatchObject({
+      operationId: started.operationId,
+      kind: "amend_push",
+      state: "succeeded",
+    });
+    const refs = await amendBridge.repository.refs(path);
+    const current = refs.branches.find((branch) => branch.current)!;
+    const upstream = refs.branches.find(
+      (branch) => branch.kind === "remote" && branch.name === current.upstream,
+    )!;
+    expect(current.oid).not.toBe(preview.headOid);
+    expect(upstream.oid).toBe(current.oid);
+    unsubscribe();
+  });
+
   it("允许没有暂存内容时只修改提交信息", async () => {
     await amendBridge.repository.unstageAll(path);
     const preview = await amendBridge.repository.previewAmendCommit(path);

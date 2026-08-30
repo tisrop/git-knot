@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
+  AmendAndPushInput,
+  AmendAndPushPreview,
   AmendCommitCreated,
   AmendCommitInput,
   AmendCommitPreview,
@@ -236,6 +238,10 @@ export const tauriBridge: DesktopApi = {
     sync: (path) => invoke<GitOperationStarted>("repository_sync_start", { path }),
     createCommit: (path, input: CommitInput) =>
       invoke<CommitCreated>("repository_create_commit", { path, input }),
+    previewAmendAndPush: (path) =>
+      invoke<AmendAndPushPreview>("repository_preview_amend_and_push", { path }),
+    amendAndPush: (path, input: AmendAndPushInput) =>
+      invoke<GitOperationStarted>("repository_amend_and_push_start", { path, input }),
     previewAmendCommit: (path) =>
       invoke<AmendCommitPreview>("repository_preview_amend_commit", { path }),
     amendCommit: (path, input: AmendCommitInput) =>
