@@ -9,12 +9,13 @@ import {
 
 async function main(root = process.cwd()) {
   const capabilitiesDirectory = resolve(root, "src-tauri/capabilities");
-  const [tauriConfig, cargoToml, packageJson, releaseWorkflow, capabilityFileNames] =
+  const [tauriConfig, cargoToml, packageJson, releaseWorkflow, ciWorkflow, capabilityFileNames] =
     await Promise.all([
       readFile(resolve(root, "src-tauri/tauri.conf.json"), "utf8").then(JSON.parse),
       readFile(resolve(root, "src-tauri/Cargo.toml"), "utf8"),
       readFile(resolve(root, "package.json"), "utf8").then(JSON.parse),
       readFile(resolve(root, ".github/workflows/release.yml"), "utf8"),
+      readFile(resolve(root, ".github/workflows/ci.yml"), "utf8"),
       readdir(capabilitiesDirectory),
     ]);
   const capabilities = await Promise.all(
@@ -27,8 +28,9 @@ async function main(root = process.cwd()) {
   );
   assertUpdaterEnabled({ tauriConfig, cargoToml, packageJson, capabilities });
   assertGitHubActionsPinned(releaseWorkflow);
+  assertGitHubActionsPinned(ciWorkflow);
   assertReleaseWorkflowPermissions(releaseWorkflow);
-  process.stdout.write("GitHub Release updater 正式配置检查通过\n");
+  process.stdout.write("GitHub Release updater 与 CI workflow 正式配置检查通过\n");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

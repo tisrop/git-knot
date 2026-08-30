@@ -54,8 +54,11 @@ TAURI_SIGNING_PRIVATE_KEY_PASSWORD
    - 校验 Tag 与三个 manifest 版本；
    - 构建 macOS Intel、macOS Apple Silicon、Linux x86_64 和 Windows x86_64；
    - 使用 updater 私钥签名安装包；
+   - 额外生成仅包含 `git-knot.exe` 的 Windows x86_64 便携 ZIP；
    - 生成并上传 `latest.json`；
-   - 在发布前运行 `validate:github-release`；
+   - 在发布前校验 updater 签名、便携 ZIP 结构和 Windows PE 文件头；
+   - 验证完成后删除仅供流水线验签使用的独立 `.sig` 附件；
+   - 自动生成变更记录和按 macOS、Windows、Linux 分类的下载入口；
    - 校验通过后把草稿 Release 发布为正式版本。
 
 ## 本地签名构建
@@ -87,7 +90,16 @@ React 不直接依赖 updater 插件。Rust 命令负责：
 
 ## Windows 便携版
 
-当前自动更新面向 Tauri 正式安装包。Windows 便携 ZIP 仍采用下载后手动覆盖，不允许运行中的便携程序自替换。若后续发布便携版，必须在 Release 元数据中使用独立资产，并继续通过 `validate:github-release` 校验其规范 GitHub 下载地址。
+自动更新面向 Tauri 正式安装包。Release 同时提供 `git-knot_<version>_x64-portable.zip`，其中只包含根目录下的 `git-knot.exe`。便携版采用下载后手动覆盖，不允许运行中的程序自替换。
+
+## CI 流水线
+
+`.github/workflows/ci.yml` 在 `main` 推送和 Pull Request 上执行：
+
+- manifest 版本、updater 策略和 GitHub Actions 固定版本检查；
+- TypeScript 类型检查、lint、格式检查、单元测试和生产构建；
+- Rust bindings、`cargo fmt`、`cargo clippy` 和完整测试；
+- macOS、Windows 的跨平台 `cargo check`。
 
 ## 配置安全检查
 
@@ -103,4 +115,5 @@ pnpm run check:update-policy
 - 公钥与正式 git-knot updater 公钥完全一致；
 - Rust 端存在 `tauri-plugin-updater`；
 - React 不直接依赖 `@tauri-apps/plugin-updater`；
-- 配置中不存在 Gitee 更新地址。
+- 配置中不存在 Gitee 更新地址；
+- CI 与 Release 使用的第三方 Action 固定到完整 commit SHA，Release 写权限仅授予构建和发布 job。

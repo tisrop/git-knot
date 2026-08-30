@@ -4,7 +4,9 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -40,17 +42,7 @@ jobs:
             patchelf
       - run: pnpm install --frozen-lockfile
       - name: Verify tag and manifest versions
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="$(node -p 'require("./package.json").version')"
-          CARGO_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' src-tauri/Cargo.toml | head -1)"
-          TAURI_VERSION="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
-          test "$VERSION" = "$CARGO_VERSION"
-          test "$VERSION" = "$TAURI_VERSION"
-          if [[ "${GITHUB_REF_TYPE}" = "tag" ]]; then
-            test "${GITHUB_REF_NAME}" = "v${VERSION}"
-          fi
+        run: pnpm run check:version -- --tag "$GITHUB_REF_NAME"
       - run: pnpm run check:update-policy
       - run: pnpm run check:bindings
       - run: pnpm run typecheck
@@ -123,6 +115,28 @@ jobs:
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
+      - name: Create and upload Windows portable ZIP
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $binary = "src-tauri/target/release/git-knot.exe"
+          if (-not (Test-Path $binary)) {
+            throw "Windows release binary not found: $binary"
+          }
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $portableDirectory = Join-Path $env:RUNNER_TEMP "git-knot-portable"
+          $portablePath = Join-Path $env:RUNNER_TEMP "git-knot_${version}_x64-portable.zip"
+          New-Item -ItemType Directory -Path $portableDirectory -Force | Out-Null
+          Copy-Item $binary (Join-Path $portableDirectory "git-knot.exe")
+          Compress-Archive `
+            -Path (Join-Path $portableDirectory "git-knot.exe") `
+            -DestinationPath $portablePath
+          gh release upload $env:GITHUB_REF_NAME $portablePath `
+            --repo $env:GITHUB_REPOSITORY `
+            --clobber
+
   verify-and-publish:
     needs: build
     permissions:
@@ -178,11 +192,62 @@ jobs:
             --repository tisrop/git-knot \
             --tag "$TAG" \
             --version "$VERSION"
+          PORTABLE_NAME="git-knot_${VERSION}_x64-portable.zip"
+          if [[ "$(jq --arg name "$PORTABLE_NAME" '[.assets[] | select(.name == $name)] | length' "$RUNNER_TEMP/release.json")" != "1" ]]; then
+            echo "Windows 便携版 ZIP 无法唯一匹配：${PORTABLE_NAME}" >&2
+            exit 1
+          fi
+          PORTABLE_PATH="$RUNNER_TEMP/git-knot-release/$PORTABLE_NAME"
+          mapfile -t PORTABLE_ENTRIES < <(unzip -Z1 "$PORTABLE_PATH")
+          if [[ "${#PORTABLE_ENTRIES[@]}" != "1" || "${PORTABLE_ENTRIES[0]}" != "git-knot.exe" ]]; then
+            echo "Windows 便携版 ZIP 必须只包含根目录下的 git-knot.exe" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/git-knot-portable"
+          unzip -q "$PORTABLE_PATH" -d "$RUNNER_TEMP/git-knot-portable"
+          PORTABLE_MAGIC="$(od -An -tx1 -N2 "$RUNNER_TEMP/git-knot-portable/git-knot.exe" | tr -d ' \n')"
+          if [[ "$PORTABLE_MAGIC" != "4d5a" ]]; then
+            echo "Windows 便携版不是有效的 PE 可执行文件" >&2
+            exit 1
+          fi
           echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
-      - name: Publish verified release
+      - name: Remove standalone updater signatures
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          gh api --method PATCH
-          "repos/tisrop/git-knot/releases/${{ steps.validate-release.outputs.release_id }}"
-          -F draft=false
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r asset_id; do
+            [[ -z "$asset_id" ]] && continue
+            gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+          done < <(jq -r '.assets[] | select(.name | endswith(".sig")) | .id' "$RUNNER_TEMP/release.json")
+      - name: Generate download guide and publish verified release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.validate-release.outputs.release_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            > "$RUNNER_TEMP/clean-release.json"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" \
+            | jq -s 'add' > "$RUNNER_TEMP/clean-assets.json"
+          GENERATED_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$GITHUB_REF_NAME" \
+            -f configuration_file_path=.github/release.yml \
+            --jq '.body')"
+          jq --arg body "$GENERATED_BODY" '.body = $body' \
+            "$RUNNER_TEMP/clean-release.json" > "$RUNNER_TEMP/release-with-notes.json"
+          node scripts/release/release-download-guide.mjs \
+            --release "$RUNNER_TEMP/release-with-notes.json" \
+            --assets "$RUNNER_TEMP/clean-assets.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --output "$RUNNER_TEMP/release-body.md"
+          RELEASE_BODY="$(cat "$RUNNER_TEMP/release-body.md")"
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -f body="$RELEASE_BODY" \
+            -F draft=false
