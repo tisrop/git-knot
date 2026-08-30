@@ -1,5 +1,7 @@
 # git-knot 架构方案
 
+> 文中「详见 ADR NNNN」指向维护者本地保存的 ADR 记录，这些文件不随仓库分发。本文档中的描述即为对外的完整边界说明，不依赖读取 ADR 原文。
+
 ## 1. 项目定位
 
 git-knot 是一个从零构建的跨平台 Git 桌面客户端。技术栈固定为：
@@ -83,8 +85,10 @@ Feature/UI -> DesktopApi -> TauriBridge -> invoke(command) -> Rust
 - Submodule 清单只读取当前 index 中 mode `160000` 的直接 gitlink、`.gitmodules` 的 `path/url/branch` 和经过逐级 symlink 检查后的直接 checkout；根状态忽略 Submodule，直接 checkout 状态也使用 `--ignore-submodules=all`，因此不会递归进入嵌套 Submodule。URL 返回前去除凭据、query 和 fragment，输出与数量均有上限；当前不开放 init/update/sync/add/remove/deinit、网络访问或任意 Submodule mutation，详见 ADR 0028；
 - 当前已落地的本地写操作包括 `stage`、`unstage`、全部暂存/取消暂存、单文件/批量 discard、commit、安全 Amend 和安全单父提交 Revert；普通 commit 不会隐式暂存未暂存文件，Amend 允许 0 个 staged 文件时只修改提交信息；
 - 安全 Amend 使用独立 `previewAmendCommit` / `amendCommit` 合同，只作用于当前 attached 本地分支的精确 `HEAD`。会话私有 token 绑定分支 full ref、HEAD、原提交 subject/body、author、author date、parents、本地已知阻塞引用、完整 index 和 staged binary diff；Detached/unborn、冲突、merge/rebase/cherry-pick/revert/sequencer 状态均拒绝。`refs/remotes/*` 中包含 HEAD 的引用和精确指向 HEAD 的 `refs/tags/*` 会阻止执行，但本地状态无法证明尚未 fetch 的服务器状态；
-- Amend 不调用 `git commit --amend`，而是先 `write-tree`，重新校验完整快照，再用 `commit-tree` 保留原 author/parents 并生成新对象，最后通过 expected-old-OID `update-ref` compare-and-swap 替换当前分支。该路径不执行 commit hooks、编辑器或本次签名；仓库 mutex 只串行应用内 mutation，外部 Git 仍可竞争。CAS 失败时原 HEAD 不会被应用覆盖，但已创建的新 commit 可能成为 dangling object，详细边界见 `docs/adr/0024-safe-head-amend.md`；
-- 安全 Revert 使用独立 `previewRevert` / `revertCommit` 合同，只接受当前 attached 本地分支历史中的 40/64 位完整 commit OID。预览和写锁内确认都要求 worktree/index 完全干净、没有其他 Git operation、目标是当前 HEAD 的 ancestor 且恰好有一个 parent；会话私有 token 绑定分支 full ref、HEAD、target、parent 和 subject。确认后固定执行 `git -c core.editor=true -c commit.gpgSign=false revert --no-edit --no-gpg-sign <exact-target-oid>`，创建新提交而不删除或改写原历史；失败若留下 `REVERT_HEAD` 会自动尝试 `git revert --abort`。当前不支持 root/merge commit、mainline、任意 revision、自定义消息、Revert Continue/Skip 或自动冲突解决；应用 mutex 与 token 不宣称跨进程 CAS，详细边界见 `docs/adr/0030-safe-single-parent-commit-revert.md`；
+- Amend 不调用 `git commit --amend`，而是先 `write-tree`，重新校验完整快照，再用 `commit-tree` 保留原 author/parents 并生成新对象，最后通过 expected-old-OID `update-ref` compare-and-swap 替换当前分支。该路径不执行 commit hooks、编辑器或本次签名；仓库 mutex 只串行应用内 mutation，外部 Git 仍可竞争。CAS 失败时原 HEAD 不会被应用覆盖，但已创建的新 commit 可能成为 dangling object，详见 ADR 0024；
+- 安全 Cherry-pick 使用独立 `previewCherryPick` / `cherryPickCommit` 合同，只接受 40/64 位完整 commit OID 对应的普通单父提交。预览和写锁内确认都要求 attached 本地分支、worktree/index 完全干净、没有其他 Git operation；会话私有 token 绑定分支 full ref、HEAD、目标 OID 和 subject。确认后固定执行 `git -c core.editor=true -c commit.gpgSign=false cherry-pick --no-gpg-sign <exact-target-oid>`，失败若留下 `CHERRY_PICK_HEAD` 会自动尝试 `git cherry-pick --abort`。不支持 merge commit、mainline、自定义消息、`--no-commit` 或 Continue/Skip，详见 ADR 0032；
+- 安全 Reset 使用独立 `previewResetCommit` / `resetCommit` 合同，模式固定为 `--soft`、`--mixed`、`--hard` 三个枚举值。选中提交等于 HEAD 时目标是其第一个 parent，否则目标即选中提交；根提交拒绝。除 attached 本地分支和干净 worktree/index 外还有两道专属校验：目标必须通过 `merge-base --is-ancestor` 确认在当前分支历史中（否则 `reset_target_not_in_history`，防止分支跳到无关历史并孤立本地提交），且被移除区间不得包含已发布提交——通过比较 `rev-list --count HEAD --not <target>` 与追加 `--remotes --tags` 后的计数判断，命中返回 `reset_published_history` 并要求改用 Revert。只检查 HEAD 是否被远端引用包含不足以覆盖“未发布 HEAD 压在已推送提交之上”的情况。token 额外绑定完整 index、staged 与 worktree binary diff（每项最多 4 MiB）。三种模式只决定目标之后内容在 index/工作区中的保留方式，不是绕过上述保护的开关；`--hard` 不删除未跟踪文件，被移除提交仅存在于 reflog 而应用不提供恢复入口，详见 ADR 0032；
+- 安全 Revert 使用独立 `previewRevert` / `revertCommit` 合同，只接受当前 attached 本地分支历史中的 40/64 位完整 commit OID。预览和写锁内确认都要求 worktree/index 完全干净、没有其他 Git operation、目标是当前 HEAD 的 ancestor 且恰好有一个 parent；会话私有 token 绑定分支 full ref、HEAD、target、parent 和 subject。确认后固定执行 `git -c core.editor=true -c commit.gpgSign=false revert --no-edit --no-gpg-sign <exact-target-oid>`，创建新提交而不删除或改写原历史；失败若留下 `REVERT_HEAD` 会自动尝试 `git revert --abort`。当前不支持 root/merge commit、mainline、任意 revision、自定义消息、Revert Continue/Skip 或自动冲突解决；应用 mutex 与 token 不宣称跨进程 CAS，详见 ADR 0030；
 - 单文件和批量 discard 统一只接收 1～256 个唯一文件路径。Rust 在仓库写锁内重新读取权威 status，并在任何 mutation 前校验完整列表：冲突、仅暂存、重复、非法或过期条目均拒绝；untracked 只清理目标文件，tracked 只恢复 worktree，未暂存 rename 恢复原路径并清理新路径；同一文件同时存在 staged/unstaged 内容时保留 index；
 - tracked restore 与 untracked clean 是两个 Git 子进程，不构成跨进程事务；外部 Git/文件系统竞争或第二阶段失败后，前端关闭确认框并刷新权威 status，不做乐观回滚；
 - 冲突版本选择只读取 Git index stage 2（当前侧）与 stage 3（传入侧），不把它们固定解释为分支 ours/theirs；rebase 等流程中的语义可能变化。预览 token 同时覆盖完整 unmerged index 记录与当前 worktree 指纹，mutation 在仓库写锁内重新读取并 compare-and-swap 校验；采用存在侧时执行 `checkout-index --stage=<2|3>` 后 `git add`，采用缺失侧时执行受限 `git rm`。二进制、非 UTF-8 或单侧超过 1 MiB 的内容不返回文本预览，gitlink/submodule 和自定义内容编辑暂不支持；
@@ -107,7 +111,7 @@ Feature/UI -> DesktopApi -> TauriBridge -> invoke(command) -> Rust
 - 历史单页限制为 1～200 条，通过 `limit + 1` 生成 `hasMore/nextOffset`，stdout 单次最多 4 MiB；文本筛选最多 256 个 Unicode 字符且禁止控制字符，文件路径经过 literal path 校验并只出现在 `HEAD -- <path>` 之后；
 - React 将筛选草稿与已执行筛选分离，筛选变化从 offset 0 开始，“继续加载”使用 Rust 返回的 nextOffset 并按 OID 去重。外部 Git 改变 `HEAD` 历史时 offset pagination 可能移动，因此当前不承诺跨页稳定快照；
 - 工作区 diff 对 tracked、staged 和 untracked 文件分别采用受限输出，patch 单次最多 2 MiB；
-- fetch、安全 Pull 和安全 Push 已接入 operation ID、结构化进度、显式取消、5 分钟硬超时、受限 stdout/stderr drain 和跨平台进程树清理；只允许 Rust 在写锁内重新确认存在的远端名，不接受任意 URL、refspec 或 force 参数。Pull 在启动时创建一个共享 deadline，fetch 和后续快进阶段使用剩余时间，不能把两个阶段各自放宽为 5 分钟；
+- fetch、安全 Pull 和安全 Push 已接入 operation ID、结构化进度、显式取消、5 分钟硬超时、受限 stdout/stderr drain 和跨平台进程树清理；只允许 Rust 在写锁内重新确认存在的远端名，不接受任意 URL、refspec 或 force 参数。Pull 在启动时创建一个共享 deadline，fetch 和后续快进阶段使用剩余时间，不能把两个阶段各自放宽为 5 分钟。Sync 同样只创建一份 deadline 并依次传给 Pull 与 Push 阶段：一次用户操作持有仓库写锁的时间不能是两个 5 分钟预算之和；
 - Pull 只作用于当前本地分支配置的远端跟踪 upstream，执行 fetch 后再执行 `git merge --ff-only --no-edit`；分叉、工作区阻塞或已有冲突时返回稳定错误，不自动 merge、rebase 或创建冲突状态；
 - Push 只作用于当前本地分支配置的已有 upstream，固定使用 `HEAD:refs/heads/<upstream-branch>`，拒绝 force push、任意 refspec、远端分支创建和非快进更新；
 - Clone 只接受 HTTPS、SSH 和 SCP-like SSH 地址，拒绝 HTTP、本地路径、凭据、query、fragment、危险主机格式以及 Gitee；目录名只能由 URL 末段推导，前端不能传目录名、refspec 或其他 Git 参数；
@@ -166,10 +170,10 @@ Feature/UI -> DesktopApi -> TauriBridge -> invoke(command) -> Rust
 ## 8. 建议实施顺序
 
 1. **仓库读取闭环**：添加仓库、项目搜索/收藏/分组、状态、分支、当前 HEAD 或 exact full ref 的受限历史筛选/分页、提交图、提交详情和 diff（已落地）；当前打开仓库的只读文件系统监听与静默刷新也已落地；
-2. **本地写操作**：stage/unstage、单文件与批量安全 discard、commit、安全 Amend、安全单父提交 Revert、安全本地 Stash、关联工作树权威清单、安全创建、lock/unlock 与失效记录 prune、安全选择冲突的 Git index stage 2/3 版本、普通 merge 的安全 Continue/Abort，以及仓库级串行队列已落地；worktree move/remove/repair、自定义合并编辑、Revert Continue/Skip、rebase/cherry-pick 和通用 sequencer 恢复仍未开放；
+2. **本地写操作**：stage/unstage、单文件与批量安全 discard、commit、安全 Amend、安全单父提交 Revert、安全单父提交 Cherry-pick、当前分支历史内的安全 Reset（soft/mixed/hard）、安全本地 Stash、关联工作树权威清单、安全创建、lock/unlock 与失效记录 prune、安全选择冲突的 Git index stage 2/3 版本、普通 merge 的安全 Continue/Abort，以及仓库级串行队列已落地；worktree move/remove/repair、自定义合并编辑、Revert 与 Cherry-pick 的 Continue/Skip、rebase 和通用 sequencer 恢复仍未开放；
 3. **分支、标签与远端**：本地/远端分支读取、Remote 安全创建/编辑/删除、从当前提交创建并切换分支、从精确历史提交创建但不切换分支、安全切换与删除、受限的 local-to-current 合并、安全本地标签读取/创建/删除、单标签 create-only 远端发布、远端标签预览与 expected-OID 删除、从已读取远端分支创建本地跟踪分支、安全 fetch、当前分支 upstream-only 的 fast-forward Pull 和非强制 Push 已落地；Remote rename、多 URL Remote 编辑、批量或签名标签和认证错误恢复仍待实现；
 4. **长任务基础设施**：operation ID、进度、取消、超时、日志脱敏和进程树清理已随 fetch 首条垂直切片落地，并已复用于 Pull、Push 和 Clone；Clone 的成功结果会自动进入项目列表；
 5. **发布与更新**：正式 GitHub 仓库、签名密钥、安装包、portable ZIP、`latest.json` 和 smoke test；
-6. **增强能力**：Submodule mutation 与递归清单、worktree 移动/删除与修复、LFS、rebase/cherry-pick 等按真实需求加入；直接 Submodule 只读清单已落地。
+6. **增强能力**：Submodule mutation 与递归清单、worktree 移动/删除与修复、LFS、rebase 与通用 sequencer 恢复等按真实需求加入；直接 Submodule 只读清单、安全 Cherry-pick 与安全 Reset 已落地。
 
 每个阶段都应交付一个可运行的端到端切片，避免先复制旧项目全部页面，再补 Rust 能力。

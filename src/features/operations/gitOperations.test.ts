@@ -40,6 +40,14 @@ describe("git operation registry", () => {
     expect(upsertGitOperation([progress], queued)).toEqual([progress]);
   });
 
+  it("keeps the first terminal state instead of letting another one overwrite it", () => {
+    const succeeded = operation("op-1", "/repo-a", "push", "succeeded");
+    const failed = operation("op-1", "/repo-a", "push", "failed");
+
+    expect(upsertGitOperation([succeeded], failed)).toEqual([succeeded]);
+    expect(upsertGitOperation([failed], succeeded)).toEqual([failed]);
+  });
+
   it("selects the latest matching operation by repository and kind", () => {
     const operations = [
       operation("op-1", "/repo-a", "fetch", "succeeded"),

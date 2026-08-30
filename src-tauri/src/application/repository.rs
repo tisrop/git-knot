@@ -630,8 +630,8 @@ impl RepositoryService {
     ) -> Result<(), CommandError> {
         self.with_write(path, |root| {
             started();
-            git::pull_fast_forward(root, Arc::clone(&cancellation), Arc::clone(&progress))?;
-            git::push_current_branch(root, cancellation, progress)
+            // One shared deadline for both phases; see `git::sync_current_branch`.
+            git::sync_current_branch(root, cancellation, progress)
         })
     }
 

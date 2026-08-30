@@ -7,6 +7,8 @@ dist/
 
 src-tauri/target/
 src-tauri/gen/
+# Local-only design records. Tracked docs cite these by number ("详见 ADR 0024"),
+# never by path, so no reference in a fresh clone points at a missing file.
 design-plans
 docs/adr/**
 

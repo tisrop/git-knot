@@ -82,6 +82,9 @@ const MAX_SCANNED_REPOSITORIES: usize = 1_000;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const PULL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const PUSH_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// Sync runs Pull and Push under one budget, so it gets the same hard ceiling
+/// as any other single network operation rather than the sum of its phases.
+const SYNC_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CLONE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const LOCAL_GIT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const FETCH_CANCELLED_MESSAGE: &str = "已取消获取远端更新";
@@ -2431,17 +2434,21 @@ pub fn preview_reset_commit(
         selected_oid.clone()
     };
 
-    let mut published_refs =
-        read_refs_matching(&root, &format!("--contains={current_oid}"), "refs/remotes")?;
-    published_refs.extend(read_refs_matching(
-        &root,
-        &format!("--contains={current_oid}"),
-        "refs/tags",
-    )?);
-    if !published_refs.is_empty() {
+    // Reset only rewinds the current branch. A target outside its history would
+    // move the branch onto unrelated commits and orphan everything that only
+    // existed here, so the boundary matches Revert and Cherry-pick: the target
+    // has to be reachable from the current HEAD.
+    if !is_ancestor(&root, &target_oid, &current_oid)? {
+        return Err(CommandError::new(
+            "reset_target_not_in_history",
+            "只能重置到当前分支历史中的提交；所选提交不在当前分支上，请改用切换分支或 Cherry-pick",
+        ));
+    }
+
+    if reset_drops_published_commits(&root, &current_oid, &target_oid)? {
         return Err(CommandError::new(
             "reset_published_history",
-            "当前 HEAD 已被远端分支或标签引用，禁止重置已发布历史；请改用 Revert",
+            "重置会移除已被远端分支或标签引用的提交，禁止重写已发布历史；请改用 Revert",
         ));
     }
 
@@ -2524,6 +2531,61 @@ pub fn reset_commit(
         ],
     )
     .map_err(|_| CommandError::new("reset_failed", "Git 拒绝重置当前分支，请刷新仓库状态后重试"))
+}
+
+/// Whether rewinding `current_oid` to `target_oid` would drop a commit that is
+/// already reachable from a remote-tracking branch or a tag.
+///
+/// Checking whether the current HEAD itself is published is not enough: an
+/// unpublished HEAD can still sit on top of commits that were pushed earlier,
+/// and resetting past them rewrites published history just the same. Counting
+/// the dropped range twice - once unrestricted, once excluding everything
+/// `refs/remotes/*` and `refs/tags/*` can reach - answers that for the whole
+/// range in two commands, instead of one ref query per dropped commit.
+fn reset_drops_published_commits(
+    repository: &Path,
+    current_oid: &str,
+    target_oid: &str,
+) -> Result<bool, CommandError> {
+    let dropped = count_commits_excluding(repository, current_oid, target_oid, false)?;
+    if dropped == 0 {
+        return Ok(false);
+    }
+    let unpublished = count_commits_excluding(repository, current_oid, target_oid, true)?;
+    Ok(unpublished < dropped)
+}
+
+fn count_commits_excluding(
+    repository: &Path,
+    include_oid: &str,
+    exclude_oid: &str,
+    exclude_published_refs: bool,
+) -> Result<u64, CommandError> {
+    let mut arguments = vec![
+        OsString::from("rev-list"),
+        OsString::from("--count"),
+        OsString::from(include_oid),
+        OsString::from("--not"),
+        OsString::from(exclude_oid),
+    ];
+    if exclude_published_refs {
+        arguments.push(OsString::from("--remotes"));
+        arguments.push(OsString::from("--tags"));
+    }
+    let argument_refs = arguments
+        .iter()
+        .map(OsString::as_os_str)
+        .collect::<Vec<_>>();
+    let output = execute_limited(Some(repository), &argument_refs, MAX_REMOTE_OUTPUT_BYTES)?;
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| {
+            CommandError::new(
+                "invalid_git_output",
+                "无法解析将被移除的提交数量，已停止重置",
+            )
+        })
 }
 
 fn reset_mode_argument(mode: ResetCommitMode) -> &'static str {
@@ -3548,16 +3610,40 @@ pub fn pull_fast_forward(
     cancellation: Arc<AtomicBool>,
     progress: Arc<dyn Fn(FetchProgress) + Send + Sync>,
 ) -> Result<(), CommandError> {
-    pull_fast_forward_with_timeout(path, cancellation, progress, PULL_TIMEOUT)
+    pull_fast_forward_before_deadline(
+        path,
+        cancellation,
+        progress,
+        OperationDeadline::new(PULL_TIMEOUT),
+    )
 }
 
-fn pull_fast_forward_with_timeout(
+/// Pulls, then pushes, under a single deadline.
+///
+/// The two phases share one budget for the same reason Pull's internal fetch
+/// and fast-forward do: giving each phase its own full timeout would let one
+/// user action hold the repository write lock for twice the documented limit.
+pub fn sync_current_branch(
     path: &Path,
     cancellation: Arc<AtomicBool>,
     progress: Arc<dyn Fn(FetchProgress) + Send + Sync>,
-    timeout: Duration,
 ) -> Result<(), CommandError> {
-    let deadline = OperationDeadline::new(timeout);
+    let deadline = OperationDeadline::new(SYNC_TIMEOUT);
+    pull_fast_forward_before_deadline(
+        path,
+        Arc::clone(&cancellation),
+        Arc::clone(&progress),
+        deadline,
+    )?;
+    push_current_branch_before_deadline(path, cancellation, progress, deadline)
+}
+
+fn pull_fast_forward_before_deadline(
+    path: &Path,
+    cancellation: Arc<AtomicBool>,
+    progress: Arc<dyn Fn(FetchProgress) + Send + Sync>,
+    deadline: OperationDeadline,
+) -> Result<(), CommandError> {
     let root = repository_root(path)?;
     let refs = repository_refs(&root)?;
     let current = refs
@@ -3668,7 +3754,20 @@ pub fn push_current_branch(
     cancellation: Arc<AtomicBool>,
     progress: Arc<dyn Fn(FetchProgress) + Send + Sync>,
 ) -> Result<(), CommandError> {
-    let deadline = OperationDeadline::new(PUSH_TIMEOUT);
+    push_current_branch_before_deadline(
+        path,
+        cancellation,
+        progress,
+        OperationDeadline::new(PUSH_TIMEOUT),
+    )
+}
+
+fn push_current_branch_before_deadline(
+    path: &Path,
+    cancellation: Arc<AtomicBool>,
+    progress: Arc<dyn Fn(FetchProgress) + Send + Sync>,
+    deadline: OperationDeadline,
+) -> Result<(), CommandError> {
     let root = repository_root(path)?;
     let refs = repository_refs(&root)?;
     let current = refs
@@ -12247,6 +12346,93 @@ mod tests {
         run_git(repository, &["tag", "published-head", &head_oid]);
         let tag_error =
             preview_reset_commit(repository, &head_oid, ResetCommitMode::Mixed, &namespace)
+                .unwrap_err();
+        assert_eq!(tag_error.code, "reset_published_history");
+    }
+
+    #[test]
+    fn rejects_reset_to_a_commit_outside_the_current_branch_history() {
+        let directory = tempdir().unwrap();
+        let repository = directory.path();
+        initialize_repository(repository);
+        fs::write(repository.join("base.txt"), "base\n").unwrap();
+        run_git(repository, &["add", "base.txt"]);
+        run_git(repository, &["commit", "--quiet", "-m", "Base"]);
+
+        // A sibling branch that never merges back into the starting branch.
+        run_git(repository, &["checkout", "--quiet", "-b", "other"]);
+        fs::write(repository.join("other.txt"), "other\n").unwrap();
+        run_git(repository, &["add", "other.txt"]);
+        run_git(repository, &["commit", "--quiet", "-m", "Other"]);
+        let other_oid = exact_commit_oid(repository, "HEAD").unwrap();
+
+        run_git(repository, &["checkout", "--quiet", "-"]);
+        fs::write(repository.join("main-only.txt"), "main\n").unwrap();
+        run_git(repository, &["add", "main-only.txt"]);
+        run_git(repository, &["commit", "--quiet", "-m", "Main only"]);
+        let head_oid = exact_commit_oid(repository, "HEAD").unwrap();
+        assert!(!is_ancestor(repository, &other_oid, &head_oid).unwrap());
+
+        let namespace = Uuid::new_v4();
+        for mode in [
+            ResetCommitMode::Soft,
+            ResetCommitMode::Mixed,
+            ResetCommitMode::Hard,
+        ] {
+            let error = preview_reset_commit(repository, &other_oid, mode, &namespace).unwrap_err();
+            assert_eq!(error.code, "reset_target_not_in_history");
+        }
+
+        // The rejected preview must leave the branch and worktree untouched.
+        assert_eq!(exact_commit_oid(repository, "HEAD").unwrap(), head_oid);
+        assert!(repository.join("main-only.txt").exists());
+        assert!(!repository.join("other.txt").exists());
+    }
+
+    #[test]
+    fn rejects_reset_that_would_drop_a_published_commit_below_an_unpublished_head() {
+        let directory = tempdir().unwrap();
+        let repository = directory.path();
+        initialize_repository(repository);
+        fs::write(repository.join("base.txt"), "base\n").unwrap();
+        run_git(repository, &["add", "base.txt"]);
+        run_git(repository, &["commit", "--quiet", "-m", "Base"]);
+        let base_oid = exact_commit_oid(repository, "HEAD").unwrap();
+        fs::write(repository.join("published.txt"), "published\n").unwrap();
+        run_git(repository, &["add", "published.txt"]);
+        run_git(repository, &["commit", "--quiet", "-m", "Published"]);
+        let published_oid = exact_commit_oid(repository, "HEAD").unwrap();
+        fs::write(repository.join("local.txt"), "local\n").unwrap();
+        run_git(repository, &["add", "local.txt"]);
+        run_git(repository, &["commit", "--quiet", "-m", "Local only"]);
+        let head_oid = exact_commit_oid(repository, "HEAD").unwrap();
+
+        // HEAD itself is unpublished, but the commit under it is on the remote.
+        run_git(
+            repository,
+            &["update-ref", "refs/remotes/origin/main", &published_oid],
+        );
+        let namespace = Uuid::new_v4();
+
+        // Rewinding only the unpublished HEAD stays allowed.
+        let head_preview =
+            preview_reset_commit(repository, &head_oid, ResetCommitMode::Mixed, &namespace)
+                .unwrap();
+        assert_eq!(head_preview.target_oid, published_oid);
+
+        // Rewinding past the published commit is not.
+        let error = preview_reset_commit(repository, &base_oid, ResetCommitMode::Mixed, &namespace)
+            .unwrap_err();
+        assert_eq!(error.code, "reset_published_history");
+
+        // A tag on the same commit blocks it for the same reason.
+        run_git(
+            repository,
+            &["update-ref", "-d", "refs/remotes/origin/main"],
+        );
+        run_git(repository, &["tag", "release", &published_oid]);
+        let tag_error =
+            preview_reset_commit(repository, &base_oid, ResetCommitMode::Mixed, &namespace)
                 .unwrap_err();
         assert_eq!(tag_error.code, "reset_published_history");
     }

@@ -31,6 +31,11 @@ export function upsertGitOperation(
   const next = [...operations];
   if (existingIndex >= 0) {
     const existing = next[existingIndex];
+    // A terminal state is final: Rust emits exactly one per operation, so a
+    // second one can only be a duplicate or out-of-order delivery. Letting it
+    // through would let a stale "failed" overwrite a recorded "succeeded" and
+    // surface an error banner for an operation that worked.
+    if (isTerminalGitOperation(existing)) return next;
     if (OPERATION_STATE_RANK[event.state] >= OPERATION_STATE_RANK[existing.state]) {
       next[existingIndex] = event;
     }

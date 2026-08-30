@@ -1830,17 +1830,61 @@ describe("web mock safe commit reset", () => {
     });
   }
 
-  it("要求干净工作区，并拒绝重置远端已包含的 HEAD", async () => {
+  it("要求干净工作区", async () => {
     const initial = await resetBridge.repository.history(path, historyQuery());
     await expect(
       resetBridge.repository.previewResetCommit(path, initial.commits[0]!.oid, "hard"),
     ).rejects.toMatchObject({ code: "reset_dirty_worktree" });
+  });
 
+  it("拒绝重置到当前分支历史之外的提交", async () => {
     await cleanWorktree();
     const mainHead = (await resetBridge.repository.status(path)).branch.oid!;
     await resetBridge.repository.switchBranch(path, "refs/heads/feature/workspace-actions");
+
+    // main 的 HEAD 不在 feature 分支历史中：重置到它会让分支跳到无关历史。
     await expect(
       resetBridge.repository.previewResetCommit(path, mainHead, "mixed"),
+    ).rejects.toMatchObject({ code: "reset_target_not_in_history" });
+  });
+
+  it("允许回退未发布的 HEAD，但拒绝越过已发布的提交", async () => {
+    vi.useFakeTimers();
+    await cleanWorktree();
+
+    // Push 让 origin/main 追上当前 HEAD，使它成为已发布提交。
+    await resetBridge.repository.push(path);
+    await vi.advanceTimersByTimeAsync(500);
+    const publishedOid = (await resetBridge.repository.status(path)).branch.oid!;
+
+    // 再提交一次：HEAD 未发布，但它的 parent 已发布。
+    const stash = (await resetBridge.repository.stashes(path)).stashes[0]!;
+    await resetBridge.repository.applyStash(path, stash.oid, false);
+    await resetBridge.repository.stageAll(path);
+    await resetBridge.repository.createCommit(path, { subject: "Local only", body: "" });
+    const headOid = (await resetBridge.repository.status(path)).branch.oid!;
+    expect(headOid).not.toBe(publishedOid);
+
+    // 只回退未发布的 HEAD 是允许的，目标就是那个已发布的 parent。
+    const preview = await resetBridge.repository.previewResetCommit(path, headOid, "mixed");
+    expect(preview.selectedIsHead).toBe(true);
+    expect(preview.targetOid).toBe(publishedOid);
+
+    // 越过已发布的 parent 继续回退则被拒绝。
+    const grandparent = (await resetBridge.repository.commit(path, publishedOid)).commit
+      .parentOids[0]!;
+    await expect(
+      resetBridge.repository.previewResetCommit(path, grandparent, "mixed"),
+    ).rejects.toMatchObject({ code: "reset_published_history" });
+  });
+
+  it("拒绝回退会移除本地标签所指向的提交", async () => {
+    await cleanWorktree();
+    const headOid = (await resetBridge.repository.status(path)).branch.oid!;
+    await resetBridge.repository.createTag(path, "published-head", headOid, null);
+
+    await expect(
+      resetBridge.repository.previewResetCommit(path, headOid, "mixed"),
     ).rejects.toMatchObject({ code: "reset_published_history" });
   });
 });

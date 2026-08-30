@@ -526,7 +526,7 @@ export function WorkspaceView({
     }
 
     const requestId = ++diffRequest.current;
-    const diffKey = `${selectedIsConflict ? "conflict" : "diff"} ${project.path} ${targetKey(selected)}`;
+    const diffKey = `${selectedIsConflict ? "conflict" : "diff"}\u0000${project.path}\u0000${targetKey(selected)}`;
     // A background refresh re-runs this effect for the file already on screen.
     // Keep the current patch visible until the new one arrives; only switching
     // targets is worth blanking the panel for.

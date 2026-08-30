@@ -879,13 +879,26 @@ function previewMockReset(
   if (!targetOid) {
     throw mockError("reset_root_commit_unsupported", "根提交没有父提交，不能通过此操作撤销");
   }
-  const publishedRefs = mockBranches.filter(
-    (branch) => branch.kind === "remote" && mockCommitAncestors(branch.oid).has(current.oid),
+  if (!mockCommitAncestors(current.oid).has(targetOid)) {
+    throw mockError(
+      "reset_target_not_in_history",
+      "只能重置到当前分支历史中的提交；所选提交不在当前分支上，请改用切换分支或 Cherry-pick",
+    );
+  }
+  // Any dropped commit that a remote ref can reach means the reset would
+  // rewrite published history, not just an unpublished HEAD.
+  const targetAncestors = mockCommitAncestors(targetOid);
+  const dropped = [...mockCommitAncestors(current.oid)].filter((oid) => !targetAncestors.has(oid));
+  const publishedDropped = dropped.some(
+    (oid) =>
+      mockBranches.some(
+        (branch) => branch.kind === "remote" && mockCommitAncestors(branch.oid).has(oid),
+      ) || mockTags.some((tag) => mockCommitAncestors(tag.targetOid).has(oid)),
   );
-  if (publishedRefs.length > 0) {
+  if (publishedDropped) {
     throw mockError(
       "reset_published_history",
-      "当前 HEAD 已被远端分支或标签引用，禁止重置已发布历史；请改用 Revert",
+      "重置会移除已被远端分支或标签引用的提交，禁止重写已发布历史；请改用 Revert",
     );
   }
   return {
